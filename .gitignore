@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+raw_cache/
+output/
+.DS_Store
+.idea/
