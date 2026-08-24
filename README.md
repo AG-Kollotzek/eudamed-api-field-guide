@@ -103,7 +103,7 @@ correct the reference repos are marked as such in the probes' output.
 
 ## Who maintains this
 
-The **IGRT Lab** at the [Medical University of
+The [**IGRT Lab**](https://www.igrt-lab.i-med.ac.at) at the [Medical University of
 Innsbruck](https://www.i-med.ac.at/). The measurements grew out of a research
 project on making EUDAMED data usable for clinical medical-device questions;
 this repository is the part of that work that belongs to everyone.
