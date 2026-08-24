@@ -1,13 +1,14 @@
-"""Probe 06 — Zertifikatssuche: echte Feldnamen und Enum-Werte.
+"""Probe 06 — certificate search: real field names and enum values.
 
-Fragen:
-  a) Wie heißen die Felder der Zertifikatssuche wirklich? Die bisherige Liste stammt
-     aus PowerShell-`select`-Anweisungen — und PowerShell ist case-insensitiv, die
-     Schreibweise ist also geraten.
-  b) Heißt das Ablaufdatum hier `expiryDate` und im Basic-UDI-Detail
-     `certificateExpiry`? Dann muss das SQLite-Mapping das vereinheitlichen.
-  c) Welche Werte nimmt `certificateType` / `status` an?
-  d) Funktioniert der Weg zur Original-PDF (C3 -> documents[] -> C4)?
+Questions:
+  a) What are the actual field names of the certificate search? Published lists
+     derive from PowerShell `select` statements, and PowerShell is
+     case-insensitive, so their spelling is guesswork.
+  b) Is the expiry date called `expiryDate` here and `certificateExpiry` in the
+     Basic UDI detail? A client then has to reconcile the two names.
+  c) Which values do `certificateType` and `status` take?
+  d) Does the route to the original PDF work (search -> detail C3 ->
+     `documents[]` -> PDF C4, see `client/eudamed_client.py`)?
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ PROBE_ID = "06"
 TITLE = "Zertifikatssuche: Feldnamen, Enums, PDF-Pfad"
 QUESTION = "Wie sehen die Daten der Zertifikatssuche wirklich aus?"
 
-#: TÜV Rheinland — Referenzfall aus Delapro/EUDAMED.
+#: TÜV Rheinland, used as the reference notified body.
 REFERENCE_NB_SRN = "0197"
 
 
@@ -58,7 +59,7 @@ def run(client: EudamedClient) -> ProbeResult:
     if null_keys(first):
         result.add(f"Felder (leer): `{'`, `'.join(null_keys(first))}`")
 
-    # (b) Wie heißt das Ablaufdatum hier?
+    # (b) What is the expiry date field called here?
     date_fields = [k for k in first if any(t in k.lower() for t in ("date", "expiry", "valid"))]
     result.add(f"Datumsfelder: `{'`, `'.join(sorted(date_fields))}`")
     result.data["date_fields"] = sorted(date_fields)
@@ -66,7 +67,7 @@ def run(client: EudamedClient) -> ProbeResult:
         result.add("-> Bestätigt: hier `expiryDate`, im Basic-UDI-Detail `certificateExpiry`. "
                    "Im SQLite-Mapping auf `expiry_date` vereinheitlichen.")
 
-    # (c) Enum-Werte einsammeln
+    # (c) Collect enum values
     for field in ("certificateType", "status", "certificateStatus", "type"):
         codes = _collect_codes(entries, field)
         if codes:
@@ -74,7 +75,7 @@ def run(client: EudamedClient) -> ProbeResult:
                        + ", ".join(f"`{code}` ({n}x)" for code, n in codes.most_common()))
             result.data[f"codes_{field}"] = dict(codes)
 
-    # Filter nach Benannter Stelle gegenprüfen
+    # Check the notified-body filter
     filtered, err_filtered = call(
         client.search_certificates, notified_body_srn=REFERENCE_NB_SRN, page=0, page_size=1
     )
@@ -89,7 +90,7 @@ def run(client: EudamedClient) -> ProbeResult:
         )
         result.data["nb_filter_works"] = works
 
-    # (d) Detail und Dokumentpfad
+    # (d) Detail and document path
     cert_uuid = first.get("uuid")
     documents: list[dict[str, Any]] = []
     if cert_uuid:

@@ -1,55 +1,42 @@
-"""Die offizielle EUDAMED-Schnittstelle — dokumentiert, ohne Schlüssel, mit Vertrag.
+"""Client for the official EUDAMED Datalake API.
 
     from client import EudamedClient
     from client.official_client import OfficialClient
 
     offiziell = OfficialClient(EudamedClient())
     for satz in offiziell.iter_udi(MF_SRN="DE-MF-000006183"):
-        ...                                  # 406 Geräte aus EINER Anfrage
+        ...                                  # 406 devices from ONE request
     codes = offiziell.referenztabelle()      # -203.0 -> "class-iii"
 
-Basis: `https://api.datalake.sante.service.ec.europa.eu/eudamed` (siehe
-`../OFFIZIELLE_API.md`). Kein Schlüssel, kein Login.
+Base: `https://api.datalake.sante.service.ec.europa.eu/eudamed` (see
+`docs/official-api.md`). No key, no login.
 
-## Warum das kein zweiter Client ist, sondern ein Aufsatz
+This is a layer on top of `EudamedClient`, not a second client:
+`EudamedClient.request()` takes a `base=` argument, so retries, backoff, raw
+cache and event log apply unchanged.
 
-`EudamedClient` bündelt HTTP, Wiederholversuche, Backoff, Rohdatenspeicher und
-das Ereignisprotokoll — rund 250 Zeilen Maschinerie, die **beide**
-Schnittstellen brauchen. Ein zweiter, gleichrangiger Client hieße, sie zu
-verdoppeln oder erst umzuziehen; beides ist Aufwand an laufendem Code ohne
-funktionalen Gewinn.
+## Three API properties encapsulated here
 
-Stattdessen komponiert dieser Aufsatz den vorhandenen Transport:
-`EudamedClient.request()` nimmt seit jeher ein `base=`-Argument, und
-`RawCache._slug` bildet den Datalake-Host bereits auf einen eigenen Ordner ab.
-Der Zwischenspeicher, das Ereignisprotokoll und die Drosselung gelten damit
-unverändert — ohne dass hier eine Zeile davon steht.
+**1. Two mandatory parameters.** `format` and `api-version` must be sent on
+**every** call. Omitting either yields HTTP 400.
 
-## Drei Eigenheiten der Gegenseite, die hier gekapselt werden
+**2. The leading space.** Stored nomenclature values carry one: `" L031299"`.
+`NOMENCLATURE_CODE=Q010601` therefore returns **zero** rows,
+`NOMENCLATURE_CODE=%20Q010601` returns 1081. `iter_udi()` adds the space;
+`watch/apiwacht.py` checks whether the quirk still exists, because the
+workaround has to go once it does not.
 
-**1. Zwei Pflichtparameter.** `format` und `api-version` müssen bei **jedem**
-Aufruf mit. Fehlt einer, kommt HTTP 400. Kein Aufrufer sollte das wissen
-müssen.
+**3. Cursor instead of page numbers.** `page`, `offset`, `limit`, `$top` — all
+eight probed variants answer HTTP 400. Each response carries a `nextLink` with
+an opaque `$after` token instead. One page holds 1000 records.
 
-**2. Das führende Leerzeichen.** Die gespeicherten Nomenklaturwerte tragen
-eines: `" L031299"`, im Rohbestand nachgesehen. `NOMENCLATURE_CODE=Q010601`
-liefert deshalb **null** Zeilen, `NOMENCLATURE_CODE=%20Q010601` liefert 1081.
-Das ist ein Fehler der Gegenseite. Er wird hier eingepackt und nicht
-weitergereicht — und `apiwacht.py` sieht nach, ob er noch besteht: Verschwindet
-er, muss diese Kapselung weg, sonst sucht sie ins Leere.
+## What it cannot do
 
-**3. Cursor statt Seitenzahlen.** `page`, `offset`, `limit`, `$top` — alle acht
-geprüften Spielarten antworten mit HTTP 400. Stattdessen trägt jede Antwort ein
-`nextLink` mit einem undurchsichtigen `$after`-Wert. Eine Seite fasst 1000
-Datensätze.
-
-## Was sie nicht kann
-
-**Keine Zertifikate** — nicht als Filter, nicht als Feld, nicht als Ressource
-(`/certificates` antwortet mit 404, Probe 07). **Keine Präfixsuche** über die
-Nomenklatur. **Keine Filter** auf Risikoklasse, Rechtsrahmen oder Marktstatus;
-die stehen nur als Kennzahlen im Datensatz und sind lokal auszuwerten. Wann
-sich der Weg hierher lohnt, muss der Aufrufer entscheiden — nicht dieser Client.
+**No certificates** — not as a filter, not as a field, not as a resource
+(`/certificates` answers 404, probe 07). **No prefix search** over the
+nomenclature. **No filter** on market status. Risk class and legislation do
+filter server-side, but only via the API's own numeric ids (`-10.0` instead of
+`class-iii`).
 """
 
 from __future__ import annotations
@@ -63,54 +50,47 @@ from client.eudamed_client import DATALAKE_URL, EudamedClient
 
 log = logging.getLogger(__name__)
 
-#: Bei jedem Aufruf verlangt. Fehlt einer, antwortet die Schnittstelle mit 400.
+#: Required on every call. Omitting either yields HTTP 400.
 PFLICHTPARAMETER = {"format": "json", "api-version": "v1.0"}
 
-#: Parameter, die `/udi` annimmt. Alles andere wird mit HTTP 400 abgelehnt —
-#: das Gegenteil des stillen Verwurfs der UI-API und ein Sicherheitsgewinn:
-#: Ein Tippfehler im Parameternamen fällt sofort auf, statt stillschweigend
-#: ungefilterte Ergebnisse zu liefern.
+#: Parameters `/udi` accepts. Anything else is rejected with HTTP 400 — the
+#: opposite of the UI API's silent discard, and safer: a typo in a parameter
+#: name surfaces immediately instead of returning unfiltered results.
 ANGENOMMEN = frozenset({
     "PRIMARY_DI", "BASIC_UDI", "MF_SRN", "TRADE_NAME", "DEVICE_NAME",
     "NOMENCLATURE_CODE", "REFERENCE",
-    # Am 2026-08-17 nachgemessen und in OFFIZIELLE_API.md §3 falsch als
-    # abgelehnt geführt: Beide filtern serverseitig, nur über die eigenen
-    # Kennzahlen (`-10.0` statt `class-iii`).
+    # Measured 2026-08-17: both filter server-side, but only via the API's own
+    # numeric ids (`-10.0`, not `class-iii`).
     "RISK_CLASS_ID", "APPLICABLE_LEGISLATION_ID",
 })
 
-#: Geprüft und abgelehnt (HTTP 400). Steht hier, damit niemand sie erneut
-#: probiert, und damit `apiwacht.py` merkt, wenn eine davon plötzlich geht.
+#: Probed and rejected (HTTP 400). Listed so they are not tried again, and so
+#: `watch/apiwacht.py` notices if one of them starts working.
 ABGELEHNT = frozenset({
     "MF_NAME", "IMPLANTABLE", "STERILE", "UUID", "DEVICE_STATUS_TYPE_ID",
 })
 
-#: So viele Datensätze liefert eine Seite. Nicht einstellbar — jeder Versuch,
-#: die Seitengröße zu setzen, endet in HTTP 400.
+#: Records per page. Not adjustable — every attempt to set a page size ends in
+#: HTTP 400.
 SEITENGROESSE = 1000
 
-#: Notbremse gegen einen Cursor, der nicht endet. Bei 1000 Datensätzen je Seite
-#: sind das 50.000 Geräte; darüber ist die Frage falsch gestellt und nicht die
-#: Schleife kaputt.
+#: Guard against a cursor that never ends. At 1000 records per page this is
+#: 50,000 devices.
 MAX_SEITEN = 50
 
-#: Obergrenze für den Akteursabzug. Bei 1.000 Sätzen je Seite und rund 48.800
-#: Akteuren (gemessen 2026-08-19) sind 49 Seiten nötig; der Aufschlag lässt
-#: Wachstum zu, ohne dass ein Fehler in der Cursor-Kette endlos blättert.
+#: Page limit for the actor dump. At 1000 records per page and roughly 48,800
+#: actors (measured 2026-08-19) 49 pages are needed; the margin allows growth
+#: without letting a broken cursor chain page forever.
 AKTEURSSEITEN = 80
 
 
 def als_filter(parsed: Any) -> dict[str, str]:
-    """`ParsedQuery` -> die Parameternamen der offiziellen Schnittstelle.
+    """`ParsedQuery` -> parameter names of the official API.
 
-    Zwei Abbildungen für zwei Schnittstellen — die
-    Namensräume überschneiden sich in **keinem** Feld (`srn` gegen `MF_SRN`,
-    `tradeName` gegen `TRADE_NAME`), und eine gemeinsame Funktion müsste
-    deshalb ohnehin verzweigen.
-
-    Übernommen wird nur, was die Gegenseite auch annimmt. Risikoklasse,
-    Rechtsrahmen und Marktstatus fehlen mit Absicht: Sie werden mit HTTP 400
-    abgelehnt und sind lokal nachzufiltern.
+    The two APIs share no field name (`srn` vs `MF_SRN`, `tradeName` vs
+    `TRADE_NAME`), so the mapping is separate from the UI-API one. Only
+    parameters the API accepts are passed on; market status has no filter and
+    must be applied locally.
     """
     filter: dict[str, str] = {}
     if getattr(parsed, "manufacturer_srn", None):
@@ -118,15 +98,13 @@ def als_filter(parsed: Any) -> dict[str, str]:
     if getattr(parsed, "product_name", None):
         filter["TRADE_NAME"] = parsed.product_name
     if getattr(parsed, "emdn_code", None):
-        # Kommt über `route_request` nicht vor — eine EMDN-Abfrage geht immer
-        # zur UI-API. Steht hier trotzdem, damit ein direkter Aufruf nicht
-        # stillschweigend ohne Gruppenfilter läuft.
+        # Mapped so that a direct call does not silently run without the
+        # nomenclature filter. Note there is no prefix search here.
         filter["NOMENCLATURE_CODE"] = parsed.emdn_code
 
-    # Risikoklasse und Rechtsrahmen filtern serverseitig — aber nur über die
-    # Kennzahlen der Gegenseite. `class-iii` wird mit HTTP 400 abgelehnt,
-    # `-10.0` liefert die vier Klasse-III-Geräte von Brainlab. Das ist der
-    # Grund, warum `OfficialClient.referenztabelle()` keine Zugabe ist.
+    # Risk class and legislation filter server-side, but only via the API's own
+    # numeric ids: `class-iii` is rejected with HTTP 400, `-10.0` returns the
+    # four class III devices of the sample manufacturer.
     from client.normalisierung import RECHTSRAHMEN_ID, RISIKOKLASSEN_ID
 
     for feld, tabelle, ziel in (
@@ -140,30 +118,29 @@ def als_filter(parsed: Any) -> dict[str, str]:
 
 
 class OfficialClient:
-    """Aufsatz auf den vorhandenen Transport, nicht dessen Zwilling."""
+    """Official Datalake API on top of the shared `EudamedClient` transport."""
 
     def __init__(self, transport: EudamedClient) -> None:
         self.transport = transport
 
-    # -- Der eine Aufruf, über den alles läuft ------------------------------
+    # -- The single request path --------------------------------------------
 
     def _hole(self, pfad: str, params: dict[str, Any]) -> dict[str, Any]:
-        """Eine Anfrage gegen den Datalake. Gibt die Nutzdaten zurück."""
+        """One request against the Datalake, with the mandatory parameters."""
         antwort = self.transport.request(
             pfad, {**PFLICHTPARAMETER, **params}, base=DATALAKE_URL)
         return antwort.data if isinstance(antwort.data, dict) else {}
 
-    # -- Geräte -------------------------------------------------------------
+    # -- Devices ------------------------------------------------------------
 
     def iter_udi(self, *, grenze: int | None = None,
                  **filter: str) -> Iterator[dict[str, Any]]:
-        """Alle Geräte zu einer Filterlage — über den Cursor, Seite für Seite.
+        """All devices matching a filter, page by page via the cursor.
 
-        Ein `NOMENCLATURE_CODE` bekommt das führende Leerzeichen vorangestellt,
-        falls es fehlt (siehe Modul-Docstring). Unbekannte Parameternamen
-        werden **hier** abgefangen statt draußen in einem HTTP 400: Die
-        Gegenseite nennt im Fehlertext zwar den Parameter, aber der Aufrufer
-        soll die Liste sehen, nicht raten.
+        A `NOMENCLATURE_CODE` gets the leading space prepended if it is missing
+        (see module docstring). Unknown parameter names raise `ValueError` here
+        instead of reaching the API as HTTP 400, so the caller sees the list of
+        accepted names.
         """
         unbekannt = set(filter) - ANGENOMMEN
         if unbekannt:
@@ -202,15 +179,12 @@ class OfficialClient:
 
     @staticmethod
     def _cursor(weiter: str, filter: dict[str, str]) -> tuple[str, dict[str, Any]]:
-        """Aus dem `nextLink` wieder Pfad und Parameter machen.
+        """Split a `nextLink` back into path and parameters.
 
-        Die Gegenseite liefert eine vollständige URL; der Transport setzt aber
-        `base` und Pfad selbst zusammen. Also wird die URL zerlegt und der
-        undurchsichtige `$after`-Wert als gewöhnlicher Parameter durchgereicht.
-
-        Die ursprünglichen Filter kommen wieder mit dazu: Der Cursor trägt sie
-        zwar in seinem Token, aber darauf zu bauen hieße, sich auf ein Format
-        zu verlassen, das niemand zugesagt hat.
+        The API returns a full URL while the transport composes `base` and path
+        itself, so the URL is taken apart and the opaque `$after` value passed
+        on as an ordinary parameter. The original filters are re-applied rather
+        than trusted to the undocumented cursor token.
         """
         zerlegt = urlparse(weiter)
         pfad = zerlegt.path.split("/eudamed", 1)[-1] or "/udi"
@@ -218,48 +192,43 @@ class OfficialClient:
         return pfad, {**filter, **aus_url}
 
     def hole_geraet(self, primary_di: str) -> dict[str, Any] | None:
-        """Ein einzelnes Gerät über seine UDI-DI."""
+        """A single device by its primary UDI-DI, or None."""
         return next(iter(self.iter_udi(PRIMARY_DI=primary_di, grenze=1)), None)
 
     def hole_hersteller(self, srn: str, *,
                         grenze: int | None = None) -> list[dict[str, Any]]:
-        """Alle Geräte eines Herstellers. **Der Fall, für den sich das lohnt.**
+        """All devices of one manufacturer, by SRN.
 
-        Gemessen am 2026-08-16: `DE-MF-000006183` liefert 406 Geräte mit 60
-        Feldern in 21,9 Sekunden — **eine** Anfrage. Über die UI-API sind das
-        812 Anfragen und rund 22 Minuten, weil dort die Zertifikats- und die
-        Detailstufe je Gerät eine Anfrage kosten.
+        Measured 2026-08-16: `DE-MF-000006183` returns 406 devices with 60
+        fields in 21.9 seconds from **one** request. The same result over the
+        UI API takes 812 requests and about 22 minutes, because there the
+        detail and certificate levels each cost one request per device.
         """
         return list(self.iter_udi(MF_SRN=srn, grenze=grenze))
 
-    # -- Referenzwerte ------------------------------------------------------
+    # -- Reference values ---------------------------------------------------
 
     def referenztabelle(self, sprache: str = "en"
                         ) -> dict[tuple[str, float], str]:
-        """(Feldname, Kennzahl) -> Beschriftung. **Ohne die ist ein Datensatz
-        nicht lesbar.**
+        """(field name, id) -> label, read from `/reference`.
 
-        Die offizielle Schnittstelle liefert ihre Aufzählungswerte als negative
-        Kennzahlen: `RISK_CLASS_ID = -203.0`, `APPLICABLE_LEGISLATION_ID =
-        -197.0`. Was sie bedeuten, steht ausschließlich in `/reference`.
+        The API returns its enumerations as negative numeric ids
+        (`RISK_CLASS_ID = -203.0`, `APPLICABLE_LEGISLATION_ID = -197.0`); what
+        they mean is documented only in `/reference`. Three traps, all measured
+        2026-08-17:
 
-        Drei Eigenheiten, alle am 2026-08-17 nachgemessen und alle
-        fehlerträchtig:
+        **1. The key is the pair, not the number.** `-155.0` is Mozambique
+        under `PLACED_ON_THE_MARKET_ID` and IVD Annex II list A under
+        `RISK_CLASS_ID`. Keying by the number alone mixes countries with risk
+        classes.
 
-        **1. Der Schlüssel ist das Paar, nicht die Zahl.** `-155.0` ist unter
-        `PLACED_ON_THE_MARKET_ID` Mosambik und unter `RISK_CLASS_ID` die
-        IVD-Anhang-II-Liste-A. Wer nur nach der Zahl schlüsselt, mischt Länder
-        mit Risikoklassen.
+        **2. The table is itself paginated.** 6,718 rows over seven pages, the
+        first holding exactly 1,000. Ignoring the cursor yields a table that
+        looks complete but has about 260 instead of 292 keys.
 
-        **2. Die Tabelle ist selbst paginiert.** Sie umfasst 6.718 Zeilen über
-        sieben Seiten; die erste liefert genau 1.000. Wer den Cursor übersieht,
-        bekommt eine Tabelle, die vollständig aussieht und 292 Schlüssel auf
-        etwa 260 verkürzt.
-
-        **3. `VALUE` ist eine Übersetzung, kein Bezeichner.** „Classe III",
-        „Klasse IIb", „Κατηγορία III" — alles derselbe Wert. Für die
-        Zuordnung auf das Vokabular dieses Projekts ist deshalb
-        `client/normalisierung.py` zuständig, nicht diese Funktion.
+        **3. `VALUE` is a translation, not an identifier.** "Classe III",
+        "Klasse IIb", "Κατηγορία III" are the same value; stable identifiers
+        have to be mapped separately (see `client/normalisierung.py`).
         """
         tabelle: dict[tuple[str, float], str] = {}
         pfad, params = "/reference", {}
@@ -271,8 +240,8 @@ class OfficialClient:
                 if not feld or kennung is None:
                     continue
                 schluessel = (str(feld), float(kennung))
-                # Die gewünschte Sprache gewinnt; sonst gilt der erste Fund,
-                # damit auch ohne Übersetzung etwas dasteht.
+                # The requested language wins; otherwise the first hit stands,
+                # so a key without that translation still has a label.
                 if (str(zeile.get("LANGUAGE") or "").lower() == sprache.lower()
                         or schluessel not in tabelle):
                     tabelle[schluessel] = str(zeile.get("VALUE") or "")
@@ -282,31 +251,26 @@ class OfficialClient:
             pfad, params = self._cursor(weiter, {})
         return tabelle
 
-    # -- Akteure ------------------------------------------------------------
+    # -- Actors -------------------------------------------------------------
 
     def iter_actors(self, *, grenze: int | None = None,
                     seiten: int = AKTEURSSEITEN,
                     pause_s: float = 0.0,
                     **filter: str) -> Iterator[dict[str, Any]]:
-        """Der Akteursbestand — über den Cursor, Seite für Seite.
+        """The actor dump, page by page via the cursor.
 
-        Am 2026-08-19 erprobt und damit die offene Aufgabe aus
-        `OFFIZIELLE_API.md` §8 erledigt: **ohne Filter** liefert der Endpunkt
-        1.000 Sätze je Seite samt `nextLink`; bei rund 48.800 Akteuren sind das
-        49 Seiten. Der ältere Befund („`NAME=Brainlab` lieferte null Zeilen")
-        bleibt richtig — die Filtersemantik ist weiterhin ungeklärt, und genau
-        deshalb wird hier ohne Filter geblättert und danach lokal gesucht.
+        Measured 2026-08-19: **without filters** the endpoint returns 1,000
+        records per page plus `nextLink`; at roughly 48,800 actors that is 49
+        pages. Filter semantics remain unclear — a `NAME=` filter returned zero
+        rows — so callers page unfiltered and match locally.
 
-        Warum dieser Weg und nicht die UI-Suche: Der offizielle Abzug ist der
-        Weg, auf den die EUDAMED-Oberfläche selbst verweist („Download public
-        data on Actors"), er ist versioniert und dokumentiert, er liefert 1.000
-        statt 300 Sätze je Anfrage — und er trägt Felder mit, die die UI-Suche
-        nur im Detailabruf je Firma hergibt (Webseite, Umsatzsteuernummer)
-        sowie den Aktivzustand.
+        Compared with the UI actor search this endpoint returns 1,000 instead
+        of 300 records per request and carries fields the UI API exposes only
+        in the per-actor detail call (website, VAT number) plus the active
+        status.
 
-        `pause_s` ist die Höflichkeitspause zwischen den Seiten. Vorgabe 0 —
-        wer den ganzen Bestand zieht, setzt sie ausdrücklich (siehe
-        `ingest.sync_actors_offiziell`).
+        `pause_s` is a courtesy delay between pages, default 0; a full dump
+        should set it explicitly.
         """
         pfad, params, geliefert = "/actors", dict(filter), 0
         for seite in range(seiten):

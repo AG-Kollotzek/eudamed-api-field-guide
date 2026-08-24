@@ -1,22 +1,22 @@
-"""Probe 05 — Welche undokumentierten Filter wirken wirklich?
+"""Probe 05 — which undocumented filter parameters actually take effect?
 
-Frage: Die EUDAMED-UI bietet sichtbar Filter für
-Risikoklasse, Legislation und Zeitraum an, aber kein Repo nennt die zugehörigen
-Parameternamen. Welche der naheliegenden Namen funktionieren?
+Question: the EUDAMED UI visibly offers filters for risk class, legislation
+and date range, but no public source names the parameters behind them. Which
+of the obvious candidate names work?
 
-Methode: Trefferzahl einer Basisabfrage mit der Trefferzahl derselben Abfrage plus
-Kandidatenparameter vergleichen.
+Method: compare the hit count of a baseline query with the hit count of the
+same query plus one candidate parameter.
 
-  - Zahl ändert sich   -> Parameter wirkt.
-  - Zahl bleibt gleich -> Parameter wird stillschweigend ignoriert (der Normalfall
-                          bei Spring-basierten APIs) ODER der Filter trifft zufällig
-                          alles. Deshalb werden Werte gewählt, die sicher etwas
-                          ausschließen müssten.
-  - HTTP-Fehler        -> Parameter wird aktiv abgelehnt; auch das ist ein Ergebnis.
+  - count changes     -> the parameter takes effect.
+  - count unchanged   -> the parameter is silently ignored (the normal case for
+                         Spring-based APIs) OR the filter happens to match
+                         everything. Values are therefore chosen so that they
+                         must exclude something.
+  - HTTP error        -> the parameter is actively rejected; also a result.
 
-Wichtig: "wirkt" heißt hier "verändert die Treffermenge plausibel" — nicht "filtert
-nachweislich korrekt". Jeder Treffer aus dieser Probe gehört vor produktiver Nutzung
-noch einmal inhaltlich gegengeprüft.
+"Takes effect" here means "changes the result set plausibly", not "filters
+demonstrably correctly". Every hit needs a content check before it is relied
+on.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ QUESTION = "Wirken riskClassCode, Legislation-, Datums- und NB-Filter auf /devic
 
 REFERENCE_CND = "Q010601"
 
-#: (Parametername, Wert, was er bewirken soll)
+#: (parameter name, value, intended effect)
 CANDIDATES: list[tuple[str, Any, str]] = [
     ("riskClassCode", "refdata.risk-class.class-iia", "Risikoklasse IIa"),
     ("riskClass", "refdata.risk-class.class-iia", "Risikoklasse, alternativer Name"),
@@ -59,9 +59,9 @@ def run(client: EudamedClient) -> ProbeResult:
     base_count = baseline.total_elements
     result.add(f"Basis: `cndCode={REFERENCE_CND}` -> **{base_count}** Treffer.")
 
-    # Kontrollprobe: ein garantiert erfundener Parameter. Ändert er die Zahl nicht,
-    # ist bestätigt, dass unbekannte Parameter stillschweigend ignoriert werden —
-    # erst damit ist "Zahl unverändert" überhaupt interpretierbar.
+    # Control: a parameter that certainly does not exist. If it leaves the count
+    # unchanged, unknown parameters are confirmed to be silently ignored — only
+    # then is "count unchanged" interpretable at all.
     control, err_control = call(
         client.search_devices,
         cnd_code=REFERENCE_CND, page=0, page_size=1,

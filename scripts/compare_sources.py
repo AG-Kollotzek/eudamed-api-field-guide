@@ -1,49 +1,35 @@
-"""Beide EUDAMED-Schnittstellen dieselbe Frage stellen — in derselben Minute.
+"""Ask both EUDAMED interfaces the same question in the same time window.
 
-    python scripts/vergleiche_quellen.py --srn DE-MF-000006183
-    python scripts/vergleiche_quellen.py --cnd Q010601
-    python scripts/vergleiche_quellen.py --srn DE-MF-000006183 --protokoll
+    python scripts/compare_sources.py --srn DE-MF-000006183
+    python scripts/compare_sources.py --cnd Q010601
+    python scripts/compare_sources.py --srn DE-MF-000006183 --protokoll
 
-## Warum es diese Sonde gibt
+Record counts from the two interfaces taken on different days cannot be
+compared: EUDAMED receives new registrations daily, so a small gap is a day,
+not a disagreement. This probe queries both APIs within one time window and
+compares the sets of device UUIDs, separating currency lag from differing
+filter semantics.
 
-`OFFIZIELLE_API.md` §7 warnt: „Zwei Quellen sind zwei Wahrheiten" und nennt als
-Beleg 1081 Datensätze über die offizielle gegen 1071 über die UI-Schnittstelle.
-Der Beleg trägt nicht: Die beiden Zahlen wurden **an verschiedenen Tagen**
-gemessen, und EUDAMED bekommt täglich Neuregistrierungen. Zehn Datensätze
-Unterschied sind dann keine Uneinigkeit, sondern schlicht ein Tag.
+The two modes carry different meaning:
 
-Bevor darauf eine Architekturentscheidung gebaut wird — nämlich ob die
-Quellenwahl automatisch laufen darf —, gehört die Frage gemessen. Diese Sonde
-stellt beiden Schnittstellen **dieselbe Frage im selben Zeitfenster** und
-vergleicht die Geräte-UUID-Mengen. Sie beantwortet damit genau eine Frage:
+`--srn` is the clean comparison. `srn` (UI API) and `MF_SRN` (official API)
+match the same identifier exactly, so any deviation is currency.
 
-    Ist der Unterschied ein Aktualitätsversatz, oder folgt er aus der
-    unterschiedlichen Filtersemantik?
+`--cnd` is the semantic comparison and must deviate: `cndCode` matches by
+**prefix**, `NOMENCLATURE_CODE` matches **exactly** (and against a stored value
+carrying a leading space, see `docs/official-api.md`). For `Q010601` the UI API
+therefore also returns `Q01060199` and every deeper leaf.
 
-## Warum die beiden Betriebsarten verschieden viel taugen
+That yields a directed expectation, testable even though the UI search returns
+no EMDN code per hit (31 fields, `cndCode` is not among them):
 
-`--srn` ist der **saubere** Vergleich: `srn` (UI) und `MF_SRN` (offiziell) sind
-dieselbe exakte Übereinstimmung auf dieselbe Kennung. Was hier abweicht, ist
-Aktualität — sonst nichts. Das ist die Messung, auf die es ankommt.
+    official ⊆ UI
 
-`--cnd` ist der **semantische** Vergleich und muss abweichen: `cndCode` sucht
-mit **Präfix**, `NOMENCLATURE_CODE` matcht **exakt** (und über einen Wert mit
-führendem Leerzeichen, siehe `OFFIZIELLE_API.md` §3). Für `Q010601` erfasst die
-UI-Schnittstelle deshalb auch `Q01060199` und jedes tiefere Blatt.
+A record known only to the UI API is expected — it hangs off a deeper leaf. A
+record known only to the official API cannot follow from the semantics: an
+exact match never finds what a prefix match misses. That count is the signal.
 
-Daraus folgt eine **gerichtete** Erwartung, und die ist prüfbar, obwohl die
-UI-Suche je Treffer gar keinen EMDN-Code zurückgibt (nachgesehen: 31 Felder,
-`cndCode` ist keines davon):
-
-    offiziell ⊆ UI
-
-Ein Datensatz, den nur die UI kennt, ist erwartbar — er hängt an einem tieferen
-Blatt. Ein Datensatz, den **nur die offizielle Schnittstelle** kennt, kann
-dagegen nicht aus der Semantik folgen: Exaktsuche findet nie etwas, das die
-Präfixsuche verfehlt. Genau diese Zahl ist das Signal.
-
-Kostet drei bis vier Anfragen. Kein Sprachmodell, keine Schreibzugriffe auf die
-Datenbank — die Sonde misst und schreibt höchstens ihren Bericht.
+Costs three to four requests.
 """
 
 from __future__ import annotations
@@ -63,42 +49,36 @@ from client.eudamed_client import DATALAKE_URL, MAX_PAGE_SIZE  # noqa: E402
 GRUEN, ROT, GELB, GRAU, AUS = ("\033[32m", "\033[31m", "\033[33m",
                                "\033[90m", "\033[0m")
 
-#: Die offizielle Schnittstelle verlangt beide Parameter bei jedem Aufruf.
+#: The official API requires both parameters on every call.
 OFFIZIELL_FEST = {"format": "json", "api-version": "v1.0"}
 
-#: Ab so viel Abweichung im sauberen Vergleich (`--srn`) ist es kein Rauschen
-#: mehr. Zwei Registrierungen zwischen zwei Anfragen sind normal; fünf Prozent
-#: sind ein Versatz, der eine Betriebsart entscheidet.
+#: Above this share of unexplained deviation in the clean comparison (`--srn`)
+#: the difference is no longer noise. A couple of registrations arriving
+#: between the two requests is normal; five percent is a real lag.
 SCHWELLE = 0.05
 
-#: Wohin der Bericht geht. Dieselbe Datei, in der die API-Wacht ihre Funde
-#: festhält — Beobachtungen über die Schnittstellen gehören an eine Stelle.
+#: Where the report goes — the same file the API watch records its findings in.
 PROTOKOLL = Path(__file__).resolve().parent.parent / "docs" / "changelog.md"
 
 
 # ---------------------------------------------------------------------------
-# Abrufen
+# Fetching
 # ---------------------------------------------------------------------------
 
 
 def hole_ui(client: EudamedClient, *, srn: str | None = None,
             cnd: str | None = None, grenze: int = 2000) -> dict[str, str]:
-    """UUID -> EMDN-Code über die UI-Schnittstelle. Nur Stufe 1, keine Details.
-
-    Bewusst **nicht** über `ingest.sync_devices`: Das würde die Stufen 2 und 3
-    auslösen, also eine Anfrage je Gerät. Hier wird gezählt, nicht geladen.
-    """
-    # Wert ist bewusst leer: Die UI-Suche liefert je Treffer **keinen**
-    # EMDN-Code (geprüft am Rohbestand — 31 Felder, `cndCode` ist keines
-    # davon). Wer hier `basicUdi` einsetzte, verglichen eine Produktkennung
-    # gegen einen Nomenklaturcode und bekäme immer „passt nicht".
+    """UUID -> EMDN code via the UI API. Search results only, no detail calls."""
+    # The value stays empty: the UI search returns no EMDN code per hit
+    # (31 fields, `cndCode` is not among them). Substituting `basicUdi` would
+    # compare a product identifier against a nomenclature code.
     treffer: dict[str, str] = {}
     seite = 0
     while len(treffer) < grenze:
         antwort = client.search_devices(
             cnd_code=cnd, srn=srn, page=seite, page_size=MAX_PAGE_SIZE,
-            # Ohne diese Klammer filtert die UI-Suche auf „am Markt" vor und
-            # vergleicht damit gegen eine ungefilterte offizielle Liste.
+            # Without this the UI search pre-filters to devices on the market,
+            # which would be compared against an unfiltered official list.
             device_status=None)
         eintraege = antwort.content
         if not eintraege:
@@ -115,12 +95,11 @@ def hole_ui(client: EudamedClient, *, srn: str | None = None,
 
 def hole_offiziell(client: EudamedClient, *, srn: str | None = None,
                    cnd: str | None = None, grenze: int = 2000) -> dict[str, str]:
-    """UUID -> EMDN-Code über die offizielle Schnittstelle, mit Cursor.
+    """UUID -> EMDN code via the official API, following the cursor.
 
-    `NOMENCLATURE_CODE` bekommt das führende Leerzeichen vorangestellt: Die
-    gespeicherten Werte tragen es (`" L031299"`, im Rohbestand nachgesehen),
-    und ohne das liefert die Abfrage null Zeilen. Das ist ein Fehler der
-    Gegenseite und wird hier gekapselt, nicht dem Aufrufer aufgebürdet.
+    `NOMENCLATURE_CODE` is prefixed with a leading space: the stored values
+    carry one (`" L031299"`), and without it the query returns zero rows. The
+    workaround is applied here so callers do not have to know about it.
     """
     filter: dict[str, Any] = dict(OFFIZIELL_FEST)
     if srn:
@@ -140,9 +119,9 @@ def hole_offiziell(client: EudamedClient, *, srn: str | None = None,
         weiter = daten.get("nextLink")
         if not weiter:
             break
-        # Der Cursor kommt als vollständige URL zurück. Der Transport hängt
-        # `base` + Pfad zusammen, also wird hier der Rest abgeschnitten und
-        # der undurchsichtige `$after`-Wert als Parameter durchgereicht.
+        # `nextLink` comes back as a full URL. The transport joins `base` and
+        # path itself, so the rest is stripped here and the opaque `$after`
+        # value is passed on as a parameter.
         from urllib.parse import parse_qs, urlparse
 
         zerlegt = urlparse(weiter)
@@ -153,21 +132,21 @@ def hole_offiziell(client: EudamedClient, *, srn: str | None = None,
 
 
 # ---------------------------------------------------------------------------
-# Vergleichen
+# Comparison
 # ---------------------------------------------------------------------------
 
 
 def vergleiche(ui: dict[str, str], offiziell: dict[str, str],
                *, praefixlage: bool) -> dict[str, Any]:
-    """Die beiden Mengen gegeneinander. Reine Rechnung, kein Netz.
+    """Compare the two UUID sets. Pure computation, no network.
 
-    `praefixlage` sagt, welche Erwartung gilt:
+    `praefixlage` selects the expectation:
 
-      False (`--srn`)  Beide Seiten matchen exakt dieselbe Kennung. Jede
-                       Abweichung in BEIDE Richtungen ist ungeklärt.
-      True  (`--cnd`)  Erwartet wird `offiziell ⊆ UI`. Nur-UI-Datensätze sind
-                       die Präfixbreite und damit erklärt; nur-offizielle
-                       können aus der Semantik NICHT folgen und zählen voll.
+      False (`--srn`)  Both sides match the same identifier exactly. Any
+                       deviation in EITHER direction is unexplained.
+      True  (`--cnd`)  Expected is `official ⊆ UI`. UI-only records are the
+                       prefix breadth and thus explained; official-only
+                       records cannot follow from the semantics and count.
     """
     nur_ui = set(ui) - set(offiziell)
     nur_off = set(offiziell) - set(ui)
@@ -188,7 +167,7 @@ def vergleiche(ui: dict[str, str], offiziell: dict[str, str],
 
 
 def bericht(b: dict[str, Any], *, filterlage: str, dauer_s: float) -> str:
-    """Der Befund als Markdown-Block — für Terminal und `docs/changelog.md`."""
+    """Format the finding as Markdown for terminal and `docs/changelog.md`."""
     jetzt = datetime.now(timezone.utc).isoformat(timespec="seconds")
     anteil = b["ungeklaert_anteil"]
     urteil = (
@@ -273,9 +252,8 @@ def main(argv: list[str] | None = None) -> int:
     print("\n".join("  " + z for z in text.splitlines()))
 
     if b["beispiele_nur_ui"]:
-        # In der Präfixlage sind diese Datensätze gerade ERKLÄRT — sie hängen
-        # an einem tieferen Blatt. Sie „ungeklärt" zu nennen wäre die Sorte
-        # Etikett, die eine Messung falsch aussehen lässt.
+        # In prefix mode these records are explained, not unexplained: they
+        # hang off a deeper leaf of the EMDN tree.
         etikett = ("erwartet, Präfixbreite" if b["praefixlage"]
                    else "ungeklärt")
         print(f"\n  {GRAU}Beispiele nur UI ({etikett}):{AUS} "

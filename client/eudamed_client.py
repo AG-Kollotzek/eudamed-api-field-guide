@@ -1,16 +1,15 @@
-"""HTTP-Client für die (inoffizielle) EUDAMED-Public-API.
+"""HTTP client for the unofficial EUDAMED public (UI) API.
 
-Alle Endpunkte und Filterparameter hier
-sind reverse-engineert — keiner ist offiziell dokumentiert. Wo eine Annahme im Spiel
-ist, steht das als Kommentar an der jeweiligen Stelle.
+Every endpoint and filter parameter here is reverse-engineered; none is
+officially documented. Assumptions are marked as comments at the point of use.
 
-Der Client macht drei Dinge über einen simplen `requests.get` hinaus:
+Beyond a plain `requests.get`, the client adds:
 
-1. Retry mit exponentiellem Backoff. Bei EUDAMED ist ein HTTP 500 ein normaler,
-   wiederholbarer Zustand (meist ein serverseitiger Timeout), kein echter Fehler.
-2. Jede Rohantwort landet in raw_cache/. Das spart bei der Entwicklung enorm Zeit
-   (ein Request dauert 5-10 s) und liefert nebenbei die Fixtures für spätere Tests.
-3. Paginierung. `page` ist 0-basiert, `size` ist bei 300 gedeckelt.
+1. Retry with exponential backoff. On EUDAMED an HTTP 500 is a normal,
+   retryable state (usually a server-side timeout), not a hard failure.
+2. A raw response cache under raw_cache/. A request takes 5-10 s, so cached
+   bodies also serve as test fixtures.
+3. Pagination. `page` is 0-based, page size is capped at 300.
 """
 
 from __future__ import annotations
@@ -32,32 +31,31 @@ log = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------------------
-# Konstanten, alle gemessen (siehe docs/ und PROBE_RESULTS.md)
+# Constants, all measured (see docs/ and PROBE_RESULTS.md)
 # --------------------------------------------------------------------------------------
 
 BASE_URL = "https://ec.europa.eu/tools/eudamed/api"
 EMDN_URL = "https://webgate.ec.europa.eu/dyna2/emdn/api"
 DATALAKE_URL = "https://api.datalake.sante.service.ec.europa.eu/eudamed"
 
-#: Größer als 300 akzeptiert der Server offenbar nicht (Delapro: "scheinbar").
-#: Probe 02 verifiziert das.
+#: The server does not accept a page size above 300; verified by probe 02.
 MAX_PAGE_SIZE = 300
 
-#: Statuscodes, bei denen ein erneuter Versuch sinnvoll ist. 500 gehört hier
-#: ausdrücklich dazu — siehe Modul-Docstring.
+#: Status codes worth retrying. 500 is deliberately included — see the module
+#: docstring.
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
-#: EUDAMED beantwortet **jeden** Request mit einem User-Agent, der mit "python-"
-#: beginnt, mit einem HTTP 502 — auch den harmlosen /applicationInfo. Der Default
-#: von `requests` ("python-requests/x.y.z") läuft also grundsätzlich ins Leere.
-#: Am 2026-07-30 verifiziert: curl-, Postman- und eigene UA-Strings kommen durch,
-#: "python-requests/2.34.2" und "python-urllib/3.12" nicht.
-#: Deshalb ein eigener, wahrheitsgemäßer UA — kein Browser-Spoofing nötig.
+#: EUDAMED answers **every** request whose User-Agent starts with "python-"
+#: with HTTP 502, including the harmless /applicationInfo. The `requests`
+#: default ("python-requests/x.y.z") therefore never gets through.
+#: Verified 2026-07-30: curl, Postman and custom UA strings pass;
+#: "python-requests/2.34.2" and "python-urllib/3.12" do not.
+#: Hence a custom, truthful UA — no browser spoofing required.
 USER_AGENT = "eudamed-tool/0.1"
 
 
 class DeviceStatus:
-    """Werte für den Filter `deviceStatusCode`."""
+    """Values for the `deviceStatusCode` filter."""
 
     ON_THE_MARKET = "refdata.device-model-status.on-the-market"
     NO_LONGER_ON_THE_MARKET = "refdata.device-model-status.no-longer-on-the-market"
@@ -65,7 +63,7 @@ class DeviceStatus:
 
 
 class ActorType:
-    """Werte für den Filter `actorTypeCode` auf /eos."""
+    """Values for the `actorTypeCode` filter on /eos."""
 
     MANUFACTURER = "refdata.actor-type.manufacturer"
     AUTHORISED_REPRESENTATIVE = "refdata.actor-type.authorised-representative"
@@ -74,18 +72,18 @@ class ActorType:
 
 
 # --------------------------------------------------------------------------------------
-# Fehler
+# Errors
 # --------------------------------------------------------------------------------------
 
 
 class EudamedError(Exception):
-    """Basisklasse für alle Fehler dieses Clients."""
+    """Base class for all errors raised by this client."""
 
 
 class EudamedHTTPError(EudamedError):
-    """Der Server hat mit einem Fehlerstatus geantwortet."""
+    """The server answered with an error status."""
 
-    #: Sekunden aus dem `Retry-After`-Header, falls der Server einen geschickt hat.
+    #: Seconds from the `Retry-After` header, if the server sent one.
     retry_after: float | None = None
 
     def __init__(self, status_code: int, url: str, body: str = "") -> None:
@@ -96,7 +94,7 @@ class EudamedHTTPError(EudamedError):
 
 
 class EudamedRetryExhausted(EudamedError):
-    """Alle Versuche sind fehlgeschlagen."""
+    """Every attempt failed."""
 
     def __init__(self, url: str, attempts: int, last_error: Exception) -> None:
         self.url = url
@@ -106,12 +104,11 @@ class EudamedRetryExhausted(EudamedError):
 
 
 def erklaere_fehler(exc: Exception) -> str:
-    """Übersetzt technische Ausnahmen in eine Aussage, mit der man etwas anfangen kann.
+    """Turn a client exception into a readable message (German text).
 
-    EUDAMED fällt regelmäßig aus, und ein Stacktrace hilft dabei niemandem
-    weiter. Jede Meldung sagt deshalb: was passiert ist, ob es an uns liegt,
-    und was zu tun ist.
-
+    Distinguishes the cases that matter operationally: rate limiting (429),
+    EUDAMED-side outages (500/502/503/504), missing records (404) and
+    connection problems.
     """
     if isinstance(exc, EudamedRetryExhausted):
         ursache = exc.last_error
@@ -142,14 +139,14 @@ def erklaere_fehler(exc: Exception) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# Antwort-Objekt
+# Response object
 # --------------------------------------------------------------------------------------
 
 
 @dataclass
 class EudamedResponse:
-    """Eine Antwort samt Metadaten — die Metadaten brauchen wir für den Cache und
-    für das Nachvollziehen, welche Query zu welchem Ergebnis geführt hat (Phase 2)."""
+    """A response plus the metadata needed to cache it and to trace which
+    query produced which result."""
 
     url: str
     params: dict[str, Any]
@@ -165,7 +162,7 @@ class EudamedResponse:
 
     @property
     def content(self) -> list[dict[str, Any]]:
-        """Die Treffer einer Listen-Antwort. Leer, wenn es keine Liste ist."""
+        """Hits of a list response; empty if the payload is not a list page."""
         if isinstance(self.data, dict):
             return self.data.get("content") or []
         return []
@@ -184,17 +181,16 @@ class EudamedResponse:
 
 
 # --------------------------------------------------------------------------------------
-# Rohantwort-Cache
+# Raw response cache
 # --------------------------------------------------------------------------------------
 
 
 class RawCache:
-    """Legt jede Rohantwort unter raw_cache/<endpunkt>/<hash>.json ab.
+    """Stores each raw response under raw_cache/<endpoint>/<hash>.json.
 
-    Der Hash geht über URL + Parameter, ist also stabil und wiederauffindbar.
-    Gespeichert wird nicht nur der Body, sondern auch Statuscode, Dauer und
-    Zeitstempel — sonst lässt sich später nicht mehr beurteilen, wie alt ein
-    Datensatz ist.
+    The hash covers URL plus parameters, so it is stable and reproducible.
+    The envelope keeps status code, duration and timestamp alongside the body,
+    so the age of a record stays visible.
     """
 
     def __init__(self, directory: Path | str) -> None:
@@ -209,13 +205,12 @@ class RawCache:
 
     @staticmethod
     def _is_identifier(part: str) -> bool:
-        """UUID (36 Zeichen mit Bindestrichen) oder ULID (26 Zeichen)?"""
+        """True for a UUID (36 chars with hyphens) or a ULID (26 chars)."""
         return (len(part) == 36 and part.count("-") == 4) or len(part) == 26
 
     def _slug(self, url: str) -> str:
-        """Ordnername je Endpunkt, damit raw_cache/ navigierbar bleibt.
-
-        IDs fliegen raus — sonst entstünde pro Gerät ein eigener Ordner.
+        """Directory name per endpoint. IDs are dropped from the path,
+        otherwise every device would get its own folder.
         """
         path = url.replace(BASE_URL, "").replace(EMDN_URL, "emdn").replace(DATALAKE_URL, "datalake")
         parts = [p for p in path.strip("/").split("/") if p and not self._is_identifier(p)]
@@ -271,7 +266,7 @@ class RawCache:
 
 
 class EudamedClient:
-    """Client für die EUDAMED-Public-API.
+    """Client for the EUDAMED public (UI) API.
 
     >>> client = EudamedClient()
     >>> client.get_application_info().data["buildVersion"]      # doctest: +SKIP
@@ -300,22 +295,20 @@ class EudamedClient:
         self.base_url = base_url.rstrip("/")
         self.cache = RawCache(raw_cache_dir)
         self.use_cache = use_cache
-        #: Wie alt eine Cache-Antwort höchstens sein darf. `None` = unbegrenzt.
+        #: Maximum age of a cached response. `None` means unlimited.
         #:
-        #: Der Cache war ursprünglich ein reines Entwicklungswerkzeug (ein Request
-        #: dauert 5–20 s). Im laufenden Betrieb ist „unbegrenzt" aber die
-        #: gefährlichste Einstellung: Eine Zählabfrage lieferte 381 Treffer aus
-        #: dem Cache, während die Suche gleich darauf 382 Geräte fand. Bei
-        #: Zertifikatsdaten hieße derselbe Fehler „abgelaufen" statt „gültig".
-        #: Deshalb setzt die Oberfläche eine Frist; Probes und Skripte, die
-        #: Fixtures brauchen, lassen sie bewusst offen.
+        #: Unlimited is the risky setting: a count served from cache returned
+        #: 381 hits while the search right after it found 382 devices. On
+        #: certificate data the same staleness reads as "expired" instead of
+        #: "valid". Set a limit for live use; leave it open only when stable
+        #: fixtures are wanted.
         self.cache_max_age_s = cache_max_age_s
         self.max_attempts = max_attempts
         self.backoff_base_s = backoff_base_s
         self.backoff_factor = backoff_factor
         self.backoff_max_s = backoff_max_s
-        # requests erwartet (connect, read). EUDAMED verbindet schnell und
-        # antwortet langsam — deshalb kurzer Connect-, langer Read-Timeout.
+        # requests expects (connect, read). EUDAMED connects fast and responds
+        # slowly, hence a short connect and a long read timeout.
         self.timeout = (connect_timeout_s, read_timeout_s)
         self.language = language
         self.session = session or requests.Session()
@@ -323,21 +316,18 @@ class EudamedClient:
         self.on_event = on_event
 
     def close(self) -> None:
-        """Gibt den Verbindungspool frei. Nötig geworden mit dem
-        Mehrbenutzerbetrieb: Der `Sitzungsverwalter` verdrängt inaktive
-        Sitzungen samt Client — ohne close() bliebe je verdrängter Sitzung
-        ein Socket-Pool offen."""
+        """Release the connection pool. Call this when a client is discarded,
+        otherwise its socket pool stays open."""
         self.session.close()
 
-    # -- Kern ---------------------------------------------------------------------
+    # -- Core ---------------------------------------------------------------------
 
     @staticmethod
     def _cache_alter_s(cached: dict[str, Any] | None) -> float | None:
-        """Alter eines Cache-Eintrags in Sekunden, oder None bei fehlendem Datum.
+        """Age of a cache entry in seconds, or None if no usable date is stored.
 
-        Ein Eintrag ohne `fetched_at` stammt aus der Zeit vor dem Zeitstempel und
-        gilt als unbekannt alt — er wird nicht verworfen, aber auch nicht als
-        frisch ausgegeben.
+        An entry without `fetched_at` counts as unknown age: it is neither
+        discarded nor reported as fresh.
         """
         if not cached:
             return None
@@ -353,15 +343,10 @@ class EudamedClient:
         return (datetime.now(timezone.utc) - gestellt).total_seconds()
 
     def _event(self, kind: str, **felder: Any) -> None:
-        """Meldet einen Zustandswechsel an den Beobachter, falls einer gesetzt ist.
+        """Report a state change to the `on_event` callback, if one is set.
 
-        Damit kann eine Oberfläche zeigen, *was gerade passiert* — welche URL,
-        wie lange sie schon läuft, ob gerade auf ein Backoff gewartet wird. Ohne
-        das ist jede Wartezeit über zehn Sekunden von einem Absturz nicht zu
-        unterscheiden.
-
-        Ein Fehler im Rückruf darf die Anfrage nicht abbrechen: Anzeige ist
-        Beiwerk, der Abruf ist die Aufgabe.
+        Event kinds: start, ok, retry, error, cache, cache_veraltet. Exceptions
+        raised by the callback are swallowed so they cannot abort a request.
         """
         if self.on_event is None:
             return
@@ -371,13 +356,10 @@ class EudamedClient:
             log.debug("on_event-Rückruf fehlgeschlagen", exc_info=True)
 
     def _sleep_for(self, attempt: int, retry_after: float | None = None) -> float:
-        """Exponentielles Backoff mit Jitter.
+        """Exponential backoff with jitter, in seconds.
 
-        Der Jitter ist nicht Kosmetik: ohne ihn laufen parallele Jobs nach einem
-        Serverfehler synchron wieder auf die API los.
-
-        Schickt der Server einen `Retry-After`-Header (bei 429), hat der Vorrang —
-        dann wissen wir genau, wie lange zu warten ist, statt zu raten.
+        The jitter keeps parallel jobs from hitting the API in lockstep after a
+        server error. A `Retry-After` header (sent on 429) takes precedence.
         """
         if retry_after is not None:
             return min(retry_after, self.backoff_max_s) + random.uniform(0, 1)
@@ -394,7 +376,7 @@ class EudamedClient:
         try:
             return float(raw)
         except ValueError:
-            # Der Header darf auch ein HTTP-Datum enthalten; das werten wir nicht aus.
+            # The header may also carry an HTTP date; that form is not parsed.
             return None
 
     def request(
@@ -406,7 +388,7 @@ class EudamedClient:
         expect_json: bool = True,
         use_cache: bool | None = None,
     ) -> EudamedResponse:
-        """Ein GET mit Retry und Cache. Alle anderen Methoden gehen hier durch."""
+        """A GET with retry and cache. Every other method goes through here."""
         url = f"{(base or self.base_url).rstrip('/')}/{path.lstrip('/')}" if path else (base or self.base_url)
         params = {k: v for k, v in (params or {}).items() if v is not None}
         should_cache = self.use_cache if use_cache is None else use_cache
@@ -492,7 +474,7 @@ class EudamedClient:
                 elapsed = time.monotonic() - started
                 last_error = exc
 
-                # 4xx außer den retrybaren sind echte Fehler — nicht wiederholen.
+                # 4xx other than the retryable ones are hard errors: no retry.
                 status = getattr(exc, "status_code", None)
                 if status is None and isinstance(exc, requests.HTTPError) and exc.response is not None:
                     status = exc.response.status_code
@@ -516,9 +498,8 @@ class EudamedClient:
                 self._event("retry", url=url, params=params, attempt=attempt,
                             max_attempts=self.max_attempts, elapsed_s=elapsed,
                             status=status, delay_s=delay, reason=str(exc),
-                            # Ein 429 heißt: der Server hat ausdrücklich gebremst.
-                            # Das ist ein anderer Sachverhalt als ein 500 und
-                            # gehört in der Anzeige anders benannt.
+                            # A 429 means the server throttled deliberately;
+                            # that is a different state from a 500.
                             gedrosselt=status == 429)
                 time.sleep(delay)
 
@@ -541,14 +522,15 @@ class EudamedClient:
         extra_params: dict[str, Any] | None = None,
         use_cache: bool | None = None,
     ) -> EudamedResponse:
-        """Geräte-Suche über /devices/udiDiData.
+        """Device search on /devices/udiDiData.
 
-        `query` geht auf den Parameter `name`. Achtung: dessen Semantik ist unscharf —
-        er trifft laut Delapros eigenem TODO nicht nur Herstellernamen. Für gezielte
-        Suchen die benannten Filter verwenden.
+        `query` maps to the `name` parameter, whose matching semantics are
+        fuzzy: it does not only hit manufacturer names. Use the named filters
+        for targeted searches.
 
-        `page` ist 0-basiert. `page_size` wird bei MAX_PAGE_SIZE gedeckelt.
-        `extra_params` ist die Hintertür für noch ungetestete Filter (siehe Probe 05).
+        `page` is 0-based. `page_size` is capped at MAX_PAGE_SIZE.
+        `extra_params` passes untested filters through (see probe 05); an
+        unknown parameter name is silently dropped and looks like success.
         """
         if page < 0:
             raise ValueError("page ist 0-basiert und darf nicht negativ sein")
@@ -557,8 +539,8 @@ class EudamedClient:
         params: dict[str, Any] = {
             "page": page,
             "pageSize": size,
-            # `size` ist ein Dubletten-Parameter zu `pageSize`. Welcher gewinnt, ist
-            # unbekannt, deshalb wie Delapro immer beide identisch setzen.
+            # `size` duplicates `pageSize`. Which one wins is unknown, so both
+            # are always set to the same value.
             "size": size,
             "iso2Code": self.language,
             "languageIso2Code": self.language,
@@ -583,10 +565,9 @@ class EudamedClient:
         return self.request("/devices/udiDiData", params, use_cache=use_cache)
 
     def count_devices(self, **kwargs: Any) -> int:
-        """Nur die Trefferzahl, ohne die Treffer selbst zu laden.
+        """Hit count only, without loading the hits.
 
-        Der Trick ist `size=1`: kleiner geht nicht, aber es reicht, um an
-        `totalElements` zu kommen. Spart bei großen Gruppen Minuten.
+        Uses `size=1`, the smallest page that still carries `totalElements`.
         """
         kwargs.pop("page_size", None)
         kwargs.pop("page", None)
@@ -606,10 +587,10 @@ class EudamedClient:
         pause_s: float = 1.0,
         **filters: Any,
     ) -> Iterator[dict[str, Any]]:
-        """Alle Treffer über alle Seiten.
+        """Yield all hits across all pages.
 
-        Achtung: ein Vollabzug ohne Filter dauert laut Delapro rund 5 Stunden.
-        Immer mit `cnd_code`/`srn` einschränken oder `max_pages` setzen.
+        A full unfiltered dump takes roughly 5 hours. Always narrow with
+        `cnd_code`/`srn` or set `max_pages`.
         """
         page = 0
         while True:
@@ -625,27 +606,24 @@ class EudamedClient:
                 time.sleep(pause_s)
 
     def get_device(self, device_uuid: str) -> EudamedResponse:
-        """Geräte-Detail (D2). Enthält u. a. cndNomenclatures, aber keine Zertifikate."""
+        """Device detail (D2). Carries cndNomenclatures, but no certificates."""
         return self.request(
             f"/devices/udiDiData/{device_uuid}",
             {"languageIso2Code": self.language},
         )
 
     def get_basic_udi_by_device(self, device_uuid: str) -> EudamedResponse:
-        """Basic-UDI-Detail zu einer Geräte-UUID — **hier hängen die Zertifikate**.
+        """Basic UDI detail for a device UUID — this is where certificates live.
 
-        Das ist der Weg vom Suchtreffer zum Zertifikat. Er steht in keinem der beiden
-        Referenz-Repos: openregulatory dokumentiert `/devices/basicUdiData/{basicUdiDiId}`
-        und verschweigt, woher diese ID kommt; Delapro nutzt den Endpunkt gar nicht.
+        This is the path from a search hit to its certificates. The endpoint
+        takes the **device UUID**, not a separate Basic UDI ID; the
+        `basicUdiDiDataUlid` from the search result is not needed here.
+        openregulatory documents `/devices/basicUdiData/{basicUdiDiId}` without
+        saying where that ID comes from; Delapro does not use the endpoint.
 
-        Gefunden am 2026-07-30 durch Mitschnitt des UI-Traffics: die EUDAMED-Oberfläche
-        ruft beim Klick auf ein Gerät `/devices/basicUdiData/udiDiData/{deviceUuid}` auf —
-        man übergibt also die **Geräte-UUID**, keine separate Basic-UDI-ID. Die
-        `basicUdiDiDataUlid` aus dem Suchergebnis wird dafür nicht gebraucht.
-
-        ⚠️ Ein leeres `deviceCertificateInfoList` bedeutet **nicht**, dass das Gerät
-        unzertifiziert ist — nur, dass der Hersteller in EUDAMED keine Zertifikatsdaten
-        hinterlegt hat. In der Stichprobe vom 2026-07-30 hatten 3 von 12 Geräten Daten.
+        An empty `deviceCertificateInfoList` does **not** mean the device is
+        uncertified, only that the manufacturer filed no certificate data in
+        EUDAMED. In a 2026-07-30 sample, 3 of 12 devices had data.
         """
         return self.request(
             f"/devices/basicUdiData/udiDiData/{device_uuid}",
@@ -653,10 +631,10 @@ class EudamedClient:
         )
 
     def get_device_certificates(self, device_uuid: str) -> list[dict[str, Any]]:
-        """Nur die Zertifikatsliste eines Geräts.
+        """Certificate list of a device.
 
-        `deviceCertificateInfoListForDisplay` ist in der Praxis eine identische Kopie;
-        wir nehmen die Hauptliste und fallen nur zur Sicherheit auf die Kopie zurück.
+        `deviceCertificateInfoListForDisplay` is in practice an identical copy
+        and is only used as a fallback for the main list.
         """
         payload = self.get_basic_udi_by_device(device_uuid).data
         if not isinstance(payload, dict):
@@ -666,14 +644,14 @@ class EudamedClient:
         ) or []
 
     def get_basic_udi_versions(self, basic_udi_ulid: str) -> EudamedResponse:
-        """Versionshistorie einer Basic-UDI über die `basicUdiDiDataUlid` aus dem
-        Suchergebnis. Ebenfalls aus dem UI-Traffic; für Änderungsverfolgung interessant."""
+        """Version history of a Basic UDI, keyed by the `basicUdiDiDataUlid`
+        from the search result."""
         return self.request(
             f"/devices/basicUdiData/{basic_udi_ulid}/versions",
             {"languageIso2Code": self.language},
         )
 
-    # -- Zertifikate --------------------------------------------------------------
+    # -- Certificates -------------------------------------------------------------
 
     def search_certificates(
         self,
@@ -684,14 +662,15 @@ class EudamedClient:
         page_size: int = 25,
         extra_params: dict[str, Any] | None = None,
     ) -> EudamedResponse:
-        """Zertifikatssuche (C1/C2).
+        """Certificate search (C1/C2).
 
-        `actor_srn` filtert auf den Hersteller, dem das Zertifikat gehört —
-        am 2026-08-19 gemessen (MODULE_MATRIX.md): 4.472 -> 1 bei echter SRN,
-        0 bei erfundener, also serverseitig wirksam. Wie überall in der
-        UI-API gilt: Ein unbekannter Parametername wird stillschweigend
-        verworfen und sieht aus wie ein Erfolg — wer hier Parameter ergänzt,
-        misst zuerst die Kontrollprobe.
+        `actor_srn` filters on the manufacturer owning the certificate.
+        Measured 2026-08-19 (docs/module-matrix.md): 4,472 -> 1 for a real SRN
+        and 0 for an invented one, so it is applied server-side.
+
+        As everywhere in the UI API, an unknown parameter name is silently
+        dropped and looks like a successful call. Measure a control probe
+        before adding parameters here.
         """
         size = min(page_size, MAX_PAGE_SIZE)
         params: dict[str, Any] = {
@@ -709,14 +688,14 @@ class EudamedClient:
         return self.request("/certificates/search/", params)
 
     def get_certificate(self, certificate_uuid: str) -> EudamedResponse:
-        """Zertifikat-Detail (C3), inklusive `documents[]`."""
+        """Certificate detail (C3), including `documents[]`."""
         return self.request(
             f"/certificates/{certificate_uuid}/",
             {"languageIso2Code": self.language},
         )
 
     def download_document(self, document_uuid: str) -> EudamedResponse:
-        """Zertifikats-PDF (C4). `data` ist hier `bytes`, kein JSON."""
+        """Certificate PDF (C4). `data` is `bytes` here, not JSON."""
         return self.request(
             f"/documents/{document_uuid}/",
             {"languageIso2Code": self.language},
@@ -724,7 +703,7 @@ class EudamedClient:
         )
 
     def get_notified_bodies(self, *, page: int = 0, page_size: int = MAX_PAGE_SIZE) -> EudamedResponse:
-        """Liste der Benannten Stellen (C5)."""
+        """List of notified bodies (C5)."""
         size = min(page_size, MAX_PAGE_SIZE)
         return self.request(
             "/ses/notifiedBodies",
@@ -743,29 +722,26 @@ class EudamedClient:
         page: int = 0,
         page_size: int = 25,
     ) -> EudamedResponse:
-        """Economic-Operator-Suche (A1/A2).
+        """Economic operator search (A1/A2).
 
-        `name` ist ein **Neufund vom 2026-08-06** und steht in keinem der beiden
-        Referenz-Repos; die dortige Doku kennt für /eos nur
-        `countryIso2Code`, `actorTypeCode` und `srn`.
-
-        Verifiziert mit Kontrollprobe — die Gesamtzahl ohne Filter ist 48.830:
+        `name` is undocumented in the reference repos, which list only
+        `countryIso2Code`, `actorTypeCode` and `srn` for /eos. Verified
+        2026-08-06 against the unfiltered total of 48,830:
 
             name=Therapanacea   ->      1  (FR-MF-000007672, FR)
-            actorName=…         -> 48.830  (still verworfen)
-            eoName=…            -> 48.830  (still verworfen)
-            txtSearch=…         -> 48.830  (still verworfen)
+            actorName=…         -> 48,830  (silently dropped)
+            eoName=…            -> 48,830  (silently dropped)
+            txtSearch=…         -> 48,830  (silently dropped)
 
-        Drei von vier plausiblen Namen wirken also nicht — dieselbe Falle wie in
-        ../FILTER_MATRIX.md: Ein falscher Parametername sieht aus wie ein
-        erfolgreicher Aufruf. Nur `name` zählt.
+        Three of four plausible names have no effect — the same trap as in
+        docs/filter-matrix.md: a wrong parameter name looks like a successful
+        call. Only `name` filters.
 
-        **Warum dieser Endpunkt wichtig ist.** Das Gerätemodul und das
-        Herstellermodul sind getrennte Bestände. Therapanacea ist seit
-        2021-06-17 als Hersteller registriert und hat **null Geräte**
-        eingetragen — über /devices/udiDiData ist die Firma unauffindbar,
-        über /eos steht sie sofort da. Wer nur Geräte durchsucht, hält eine
-        Abdeckungslücke für ein leeres Suchergebnis.
+        The device module and the actor module are disjoint datasets.
+        Therapanacea has been registered as a manufacturer since 2021-06-17
+        with zero devices filed: unfindable via /devices/udiDiData, immediately
+        present via /eos. Searching devices alone mistakes a coverage gap for
+        an empty result.
         """
         size = min(page_size, MAX_PAGE_SIZE)
         params: dict[str, Any] = {
@@ -785,21 +761,18 @@ class EudamedClient:
         return self.request("/eos", params)
 
     def get_actor(self, actor_uuid: str) -> EudamedResponse:
-        """Actor-Detail (A3). Nutzdaten liegen unter `actorDataPublicView`."""
+        """Actor detail (A3). The payload sits under `actorDataPublicView`."""
         return self.request(
             f"/actors/{actor_uuid}/publicInformation",
             {"languageIso2Code": self.language},
         )
 
-    # -- Sonstiges ----------------------------------------------------------------
+    # -- Misc ----------------------------------------------------------------
 
     def get_application_info(self) -> EudamedResponse:
-        """Versionsstand — taugt als billiger Health-Check."""
+        """Build version. Cheap health check; never served from cache."""
         return self.request("/applicationInfo", use_cache=False)
 
     def get_emdn_tree(self) -> EudamedResponse:
-        """Kompletter EMDN-/CND-Baum. `id=#` ist die Wurzel.
-
-        Basis für Phase 3: Haiku darf nur gegen diese Liste matchen.
-        """
+        """Full EMDN/CND tree from the separate EMDN host. `id=#` is the root."""
         return self.request("/nomenclature", {"id": "#"}, base=EMDN_URL)

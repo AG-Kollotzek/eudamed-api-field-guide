@@ -1,8 +1,9 @@
-"""Probe 01 — Erreichbarkeit und Versionsstand.
+"""Probe 01 — availability and build version.
 
-Frage: Antwortet die API überhaupt, und mit welcher Version haben wir es zu tun?
-Der Versionsstand gehört ins Protokoll, weil sich Feldnamen zwischen EUDAMED-
-Releases nachweislich ändern (siehe die Release Notes im Delapro-README).
+Question: does the API respond, and which EUDAMED build is running?
+`/applicationInfo` reports `buildVersion`, `lastBuildDate` and `activeProfile`.
+The build version belongs in every record, because field names have changed
+between EUDAMED releases.
 """
 
 from __future__ import annotations

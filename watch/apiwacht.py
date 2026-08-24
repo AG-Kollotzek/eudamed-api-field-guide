@@ -1,100 +1,60 @@
-"""Beobachtet die EUDAMED-Schnittstelle über die Zeit — regelmäßig, unbeaufsichtigt.
+"""Periodic snapshots of the EUDAMED interface, compared over time.
 
-    python watch/apiwacht.py            # nur laufen lassen, wenn fällig
-    python watch/apiwacht.py --jetzt    # sofort, unabhängig vom Abstand
+    python watch/apiwacht.py            # run only if due
+    python watch/apiwacht.py --jetzt    # run immediately
 
-Eine Anwendung kann die Wacht auch beim eigenen Start nebenherlaufen lassen
-(siehe `starte_im_hintergrund`).
+The UI API is unofficial: no version guarantee, no changelog, no
+announcements. Its most dangerous property is measured in
+docs/filter-matrix.md:
 
-## Warum das nötig ist
+> EUDAMED discards unknown parameters silently. HTTP 200, a plausible
+> total, no hint -- only unfiltered.
 
-EUDAMED wird gerade erst verpflichtend und ist im Aufbau. Die Schnittstelle, auf
-der dieses Werkzeug steht, ist **inoffiziell**: keine Versionszusage, kein
-Änderungsprotokoll, keine Ankündigung. Und die gefährlichste Eigenschaft der API
-ist längst gemessen (docs/filter-matrix.md):
+A renamed parameter therefore never surfaces as an error. It surfaces only
+as a result count that stops changing when it should change. That is why
+this module measures filter effect instead of waiting for failures.
 
-> **EUDAMED verwirft unbekannte Parameter stillschweigend.** HTTP 200, plausible
-> Trefferzahl, kein Hinweis — nur eben ungefiltert.
+Roughly 34 requests per snapshot, 2 s apart -- about two minutes,
+every 14 days:
 
-Wird `riskClassCode` morgen umbenannt, liefert dieses Werkzeug weiterhin
-Ergebnisse. Sie sind dann nur nicht mehr auf die gefragte Risikoklasse
-eingeschränkt, und niemand sieht es. Genau dieser Fall ist der Grund für diese
-Datei: Er ist **nicht** an einer Fehlermeldung zu erkennen, sondern nur daran,
-dass sich eine Trefferzahl nicht mehr verändert, wenn sie sich verändern müsste.
+1. **Do the filters still work?** Every permitted value of a parameter is
+   counted separately. Clearly different counts mean the parameter
+   filters; identical counts mean it is discarded. Comparing values
+   against each other needs neither a stable baseline nor a well-chosen
+   reference group (see `FILTER`).
+2. **Do the code values still exist?** The same counts answer that. How a
+   vanished value shows up depends on what EUDAMED does with unknown
+   values, which `KANARIENVOGEL` measures on every run.
+3. **Are the fields still named the same?** `tradeName`, `primaryDi`,
+   `deviceCertificateInfoList` and the rest. A renamed field yields empty
+   data, not an error.
+4. **Which data build?** `buildVersion` is the cheapest hint that
+   something changed at all.
+5. **Does `cndCode` still do prefix search?** (from
+   `probes/probe_03_cnd_prefix.py`) A parent code covering its child nodes
+   carries every group query.
+6. **Is page numbering still 0-based?** (from
+   `probes/probe_02_pagination.py`) Otherwise every multi-page result list
+   is off by one page.
+7. **Are there filters that did not exist before?** (from
+   `probes/probe_05_filters.py`) `WUNSCHLISTE` checks parameters that have
+   no effect today; `KONTROLLE` proves that "count unchanged" still means
+   "ignored".
 
-## Was gemessen wird — und warum genau das
+Limits:
 
-Nicht „alles", sondern die Dinge, deren stille Änderung das Werkzeug falsch
-antworten ließe:
+* Meaning changes behind plausible numbers stay invisible. If
+  `riskClassCode` came to mean "at least this class", the counts would
+  still differ and nothing would be reported.
+* New capabilities are found only where someone listed them.
+  `WUNSCHLISTE` covers eight parameters; a ninth goes unnoticed.
+* Nothing happens between invocations -- no daemon and no cron, by design
+  against an unofficial, publicly funded API. The log therefore records
+  the **actual** interval, never the planned one.
 
-1. **Wirken die Filter noch?** Je Parameter wird **jeder zulässige Wert einzeln**
-   gezählt. Unterscheiden sich die Zahlen deutlich, filtert der Parameter; sind
-   sie alle gleich, wird er verworfen. Das ist die einzige Prüfung, die eine
-   stille Verwerfung überhaupt sichtbar macht — und sie braucht weder einen
-   stabilen Bezugspunkt noch eine passend gewählte Referenzgruppe (siehe
-   `FILTER`, dort steht, woran der erste Entwurf gescheitert ist).
-2. **Gibt es die Codewerte noch?** Dieselben Zahlen beantworten das gleich mit:
-   `refdata.risk-class.class-iib` und die übrigen Aufzählungswerte stehen fest
-   im Planner. Woran ein verschwundener Wert zu erkennen ist, hängt davon ab,
-   was EUDAMED mit unbekannten Werten macht — das misst der `KANARIENVOGEL` bei
-   jedem Lauf mit, statt es anzunehmen.
-3. **Heißen die Felder noch so?** Aus `tradeName`, `primaryDi` oder
-   `deviceCertificateInfoList` liest der Import. Ein umbenanntes Feld heißt:
-   Spalte leer, nicht Fehler.
-4. **Welcher Datenstand?** `buildVersion` ist der billigste Hinweis darauf, dass
-   überhaupt etwas passiert ist.
-
-Dazu drei Prüfungen, die aus den Probes hierher gewandert sind, weil sie Dinge
-betreffen, die sich ändern können — während eine Probe eine einmal beantwortete
-Frage bleibt:
-
-5. **Trägt `cndCode` noch die Präfixsuche?** (aus Probe 03) Die gesamte
-   Gruppensuche beruht darauf, dass ein Elterncode seine Unterknoten miterfasst.
-6. **Ist die Seitenzählung noch 0-basiert?** (aus Probe 02) Sonst wäre jede
-   mehrseitige Trefferliste um eine Seite versetzt.
-7. **Gibt es Filter, die es vorher nicht gab?** (aus Probe 05) Die
-   `WUNSCHLISTE` prüft Parameter, die heute wirkungslos sind und deren
-   Auftauchen dem Werkzeug eine neue Auskunft ermöglichen würde. Dazu die
-   `KONTROLLE`: Sie belegt, dass „Trefferzahl unverändert“ überhaupt noch
-   „wird ignoriert“ heißt.
-
-Rund 34 Anfragen je Aufnahme, mit 2 s Pause dazwischen — gut zwei Minuten, alle
-14 Tage.
-
-## Was diese Wacht NICHT leistet
-
-Ehrlich benannt, weil ein Wächter, dem man mehr zutraut als er kann, schlimmer
-ist als keiner:
-
-* **Bedeutungsänderungen bei plausiblen Zahlen** sind unsichtbar. Wenn
-  `riskClassCode` künftig „mindestens diese Klasse" statt „genau diese Klasse"
-  bedeutet, unterscheiden sich die Werte weiterhin, und die Wacht schweigt.
-* **Neue Möglichkeiten** findet sie nur, soweit jemand sie vorher aufgeschrieben
-  hat. Die `WUNSCHLISTE` prüft acht Parameter, von denen wir uns etwas
-  versprechen — ein neunter, an den niemand gedacht hat, bleibt unentdeckt.
-  Dafür sind weiterhin die Probes da.
-* **Zwischen zwei Aufrufen passiert nichts.** Es gibt keinen Dienst, der im
-  Hintergrund läuft — bewusst nicht, siehe unten. Läuft die Wacht acht Wochen
-  nicht, ist die letzte Aufnahme acht Wochen alt. Das Protokoll schreibt
-  deshalb den **tatsächlichen** Abstand mit, nie den geplanten.
-
-## Warum kein Dienst und kein Cron
-
-Ein Hintergrunddienst, der ohne Zutun eine fremde, inoffizielle API abfragt, ist
-etwas anderes als ein Werkzeug, das beim Aufruf einmal nachsieht. Das zweite ist
-gegenüber einer öffentlich finanzierten Infrastruktur vertretbar, das erste
-richtet dieses Repo bewusst nicht ein. Der Preis ist die Lücke oben, und die ist
-verkraftbar: Wer die Wacht nicht laufen lässt, wird von einer Änderung auch
-nicht überrascht.
-
-## Warum Zahlen kein Alarm sind
-
-EUDAMED wächst täglich. Ein Vergleich, der jede geänderte Trefferzahl meldet,
-meldet bei jedem Lauf etwas — und ein Protokoll, das immer etwas meldet, liest
-nach dem dritten Mal niemand mehr. Deshalb sind **Struktur** und **Menge**
-getrennt: Feldnamen, Filterwirkung und Codewerte sind Befunde, Trefferzahlen
-sind Beiwerk. Eine Zahl wird nur auffällig, wenn sie **fällt** (`RUECKGANG`) —
-Wachstum ist der Normalfall, Schrumpfen ist es nicht.
+Structure and volume are kept apart: field names, filter effect and code
+values are findings, result counts are context. EUDAMED grows daily, so a
+count is only flagged when it **falls** (`RUECKGANG`).
 """
 
 from __future__ import annotations
@@ -110,63 +70,60 @@ from typing import Any, Callable
 
 log = logging.getLogger(__name__)
 
-#: Die Repo-Wurzel — dieses Modul liegt in watch/, eine Ebene darunter.
+#: Repo root -- this module lives in watch/, one level down.
 WURZEL = Path(__file__).resolve().parent.parent
 
-#: Die Aufnahmen selbst — Rohdaten, maschinenlesbar, nicht im Repo (gitignored).
+#: The snapshots themselves: raw, machine-readable, gitignored.
 AUFNAHMEN = WURZEL / "output" / "apiwacht"
 
-#: Das Protokoll — im Repo, weil es die Geschichte der Schnittstelle ist: Wann
-#: hat sie sich wie verändert? Ein versioniertes Quelldokument.
+#: The log: a versioned record of when and how the interface changed.
 PROTOKOLL = WURZEL / "docs" / "changelog.md"
 
-#: Vorgesehener Abstand zwischen zwei Aufnahmen.
+#: Intended interval between two snapshots.
 ABSTAND_TAGE = 14
 
-#: Pause zwischen zwei Anfragen. Länger als im Import (1,0 s): Diese Aufnahme hat
-#: es nicht eilig und läuft womöglich neben einer echten Recherche her. Wer
-#: nebenher misst, hat hinten anzustehen.
+#: Delay between two requests. Twice the 1.0 s the client uses for bulk reads
+#: (`client/eudamed_client.py`): this measurement is not urgent and should not
+#: compete with other traffic against a public API.
 PAUSE_S = 2.0
 
-#: Erst so viele Sekunden nach dem Start beginnen. Die erste Anfrage einer
-#: Testperson soll nicht mit der Wacht um die Leitung konkurrieren.
+#: Seconds to wait before the first request when running in the background.
 VERZOEGERUNG_S = 15.0
 
-#: Aufbau der Aufnahme. Ändert sich das Format, ist ein Vergleich mit älteren
-#: Aufnahmen nicht mehr aussagekräftig — dann wird die nächste Aufnahme wieder
-#: zur Erstaufnahme statt zu einem Vergleich mit falschem Ergebnis.
+#: Snapshot layout. When it changes, a comparison against older snapshots is
+#: no longer meaningful: the next snapshot counts as a first one instead of
+#: producing a wrong diff.
 #:
-#: 1 (2026-08-14)  Filter, Codewerte, Feldnamen, Seitengröße
-#: 2 (2026-08-14)  dazu: Wunschliste, Kontrollprobe, Präfixsuche, Seitenzählung
-#: 3 (2026-08-16)  dazu: die Schalter der öffentlichen Seite
-#: 4 (2026-08-17)  dazu: die offizielle Schnittstelle — beide Zugänge, auf die
-#:                 das Werkzeug seit dem Zusatzpfad baut
+#: 1 (2026-08-14)  filters, code values, field names, page size
+#: 2 (2026-08-14)  plus wishlist, control probe, prefix search, page numbering
+#: 3 (2026-08-16)  plus the feature switches of the public site
+#: 4 (2026-08-17)  plus the official API
 FORMAT = 4
 
-#: Referenzgruppe für alle Messungen: groß genug für aussagekräftige Zahlen,
-#: klein genug, dass eine Zählabfrage schnell ist. Dieselbe Gruppe wie in
-#: Probe 05, damit die Werte dort vergleichbar bleiben.
+#: Reference group for all measurements: large enough for meaningful numbers,
+#: small enough for a fast count query. Same group as probes/probe_05_filters.py,
+#: so the values stay comparable.
 REFERENZ_CND = "Q010601"
 
-#: Die Filter, auf denen das Werkzeug steht — mit allen Werten, die der Planner
-#: setzen kann. Je Parameter wird jeder Wert einzeln gezählt. Daraus folgt beides
-#: auf einmal: ob der Parameter überhaupt filtert (die Zahlen unterscheiden sich)
-#: und ob es jeden Wert noch gibt.
+#: The filters under test, with every value that may be set. Each value is
+#: counted separately, which answers two questions at once: whether the
+#: parameter filters at all (the counts differ) and whether each value still
+#: exists.
 #:
-#: Der erste Entwurf verglich stattdessen eine Referenzgruppe mit und ohne
-#: Filter. Das war aus zwei gemessenen Gründen untauglich (2026-08-14):
+#: Comparing one reference group with and without a filter does not work
+#: (measured 2026-08-14):
 #:
-#:   * Zählstände schwanken. Dieselbe Gruppe lieferte 1071 und Sekunden später
-#:     1079 Treffer — der „gefilterte" Wert lag ÜBER dem ungefilterten, und der
-#:     Filter galt als ausgefallen. EUDAMED ist ein lebender Bestand.
-#:   * Die Referenzgruppe war zufällig einfarbig. In Q010601 (Dentallegierungen)
-#:     ist fast alles Klasse IIa; ein Filter auf IIa nimmt dort nichts weg, ganz
-#:     gleich wie gut er funktioniert.
+#:   * Counts fluctuate. The same group returned 1071 hits and, seconds later,
+#:     1079 -- the "filtered" value was ABOVE the unfiltered one. EUDAMED is a
+#:     live registry.
+#:   * A reference group can be uniform. In Q010601 (dental alloys) almost
+#:     everything is class IIa, so a IIa filter removes nothing there no matter
+#:     how well it works.
 #:
-#: Der Vergleich mehrerer Werte untereinander hat beide Probleme nicht: Er
-#: braucht keinen stabilen Bezugspunkt und keine passend gewählte Gruppe. Vier
-#: Risikoklassen, die 1,5 Mio · 843 Tsd · 496 Tsd · 146 Tsd liefern, beweisen die
-#: Filterwirkung ohne jede weitere Annahme.
+#: Comparing several values against each other has neither problem: it needs no
+#: stable baseline and no well-chosen group. Four risk classes returning
+#: 1.5 M / 843 k / 496 k / 146 k prove the filter works without further
+#: assumptions.
 FILTER: dict[str, dict[str, Any]] = {
     "riskClassCode": {
         "zweck": "Risikoklasse",
@@ -187,21 +144,19 @@ FILTER: dict[str, dict[str, Any]] = {
     },
 }
 
-#: Zählstände schwanken zwischen zwei Abrufen; EUDAMED ist ein lebender Bestand.
-#: Unterschiede unterhalb dieses Anteils am Gesamtbestand gelten deshalb als
-#: „gleich". Gemessen wurde eine Schwankung von 0,7 % innerhalb einer Minute.
+#: Counts fluctuate between two calls; EUDAMED is a live registry. Differences
+#: below this share of the total therefore count as "equal". A fluctuation of
+#: 0.7 % within one minute has been measured.
 TOLERANZ = 0.02
 
-#: Filter, die es **nicht** gibt — und deren Auftauchen etwas ändern würde.
+#: Filters that do **not** exist today and whose appearance would change what
+#: can be asked. Checking all 35 ineffective parameters from
+#: docs/filter-matrix.md every run would be wasteful; these are the ones with a
+#: concrete use. Each entry names what it would enable.
 #:
-#: Alle 35 wirkungslosen Parameter aus ../FILTER_MATRIX.md jedes Mal zu prüfen
-#: wäre Verschwendung; die meisten wären auch dann nur nett. Hier stehen die, bei
-#: denen das Werkzeug heute „kann ich nicht" sagen muss und mit denen es morgen
-#: eine neue Frage beantworten könnte. Je Eintrag: was daraus würde.
-#:
-#: Diese Liste ist die Antwort auf eine Lücke, die die Wacht sonst hätte: Sie
-#: prüft, was wir nutzen. Was EUDAMED **dazubekommt**, sähe sie nie — und ein
-#: Register im Aufbau bekommt Dinge dazu.
+#: Without this list the watch would only cover what is already used and would
+#: never see what EUDAMED **gains** -- and a registry under construction gains
+#: things.
 WUNSCHLISTE: dict[str, dict[str, str]] = {
     "countryIso2Code": {
         "wert": "DE",
@@ -246,43 +201,32 @@ WUNSCHLISTE: dict[str, dict[str, str]] = {
     },
 }
 
-#: Ein Parametername, den es sicher nicht gibt. Er belegt die Grundannahme, auf
-#: der jedes „wirkt nicht" beruht: EUDAMED verwirft unbekannte Parameter
-#: stillschweigend. Wäre das eines Tages nicht mehr so — etwa weil unbekannte
-#: Namen abgelehnt werden —, hieße „Trefferzahl unverändert" plötzlich etwas
-#: anderes, und die halbe Wacht wäre stillschweigend wirkungslos.
-#:
-#: Dieselbe Kontrollprobe steht am Anfang von ../FILTER_MATRIX.md. Sie gehört
-#: wiederholt, nicht einmal gemacht.
+#: A parameter name that certainly does not exist. It backs the assumption
+#: behind every "has no effect": EUDAMED discards unknown parameters silently.
+#: If that ever changed -- unknown names rejected instead -- then "count
+#: unchanged" would mean something else and half of these checks would be
+#: silently pointless. Measured on every run, not once (see
+#: docs/filter-matrix.md).
 KONTROLLE = ("diesenParameterGibtEsNicht", "egal")
 
-#: Schalter, mit denen EUDAMED steuert, was auf der öffentlichen Seite
-#: überhaupt erscheint. Am 2026-08-16 über `/configurationParameters?scope=PUBLIC`
-#: gefunden — die offizielle Oberfläche fragt sie beim Start selbst ab.
+#: Feature switches with which EUDAMED controls what appears on the public site
+#: at all. Found 2026-08-16 via `/configurationParameters?scope=PUBLIC`; the
+#: official UI queries them at startup.
 #:
-#: Sie sind das genaue Gegenstück zur `WUNSCHLISTE`: Dort geht es um Filter, die
-#: dazukommen könnten, hier um ganze Bestände. Zwei Schalter stehen heute auf
-#: „aus" und beantworten damit eine Frage, die das Werkzeug seinen Nutzern
-#: gegenüber bisher nur behaupten konnte:
+#: They are the counterpart to `WUNSCHLISTE`: not filters that might be added,
+#: but whole data sets. Two of them settle questions that would otherwise be
+#: guesswork:
 #:
-#:     ffVigFsn = false   Sicherheitsmeldungen (FSN) sind öffentlich NICHT
-#:                        sichtbar. Der Satz „Rückrufe geben wir nicht her"
-#:                        ist damit belegt und nicht geschätzt.
-#:     ffSscpi  = true    Die Kurzberichte über Sicherheit und klinische
-#:                        Leistung sind öffentlich — ein Bestand, den das
-#:                        Werkzeug bisher nicht nutzt.
+#:     ffVigFsn = false   Field safety notices (FSN) are NOT publicly visible.
+#:     ffSscpi  = true    The summaries of safety and clinical performance are
+#:                        public.
 #:
-#: Springt einer dieser Schalter um, ändert sich, was das Werkzeug beantworten
-#: kann. Das gehört ins Protokoll, sobald es passiert — und nicht erst, wenn
-#: jemand zufällig darüber stolpert.
-#:
-#: Die vollständige Tafel mit allen zwölf Werten, dazu die offizielle
-#: öffentliche API, auf die einer der Schalter verweist, steht in
-#: OFFIZIELLE_API.md.
+#: A flipped switch changes what the public data can answer, so it belongs in
+#: the log. The full table of all twelve values is in docs/official-api.md.
 SCHALTER = "/configurationParameters"
 
-#: Was ein umgelegter Schalter für dieses Werkzeug bedeutet. Nur für die, bei
-#: denen die Antwort feststeht — der Rest bekommt einen allgemeinen Satz.
+#: What a flipped switch means, for the switches where the answer is known.
+#: The rest get a generic sentence.
 SCHALTER_FOLGEN = {
     "ffVigFsn": "Sicherheitsmeldungen und Rückrufe (FSN) wären damit öffentlich "
                 "sichtbar — bisher sind sie es nicht (siehe docs/gotchas.md, "
@@ -303,63 +247,59 @@ SCHALTER_FOLGEN = {
                                "Schnittstelle, auf der dieses Werkzeug läuft.",
 }
 
-#: Codes zunehmender Länge für die Präfixprobe. Erwartet wird eine Kette:
-#: count(Q01) >= count(Q0106) >= count(Q010601), alle größer null.
+#: Codes of increasing length for the prefix probe. Expected chain:
+#: count(Q01) >= count(Q0106) >= count(Q010601), all greater than zero.
 PRAEFIXKETTE = ("Q01", "Q0106", "Q010601")
 
-#: Ab diesem Rückgang gilt eine Trefferzahl als auffällig. Wachstum wird nie
-#: gemeldet — EUDAMED füllt sich, das ist der erwartete Zustand.
+#: A result count is flagged from this drop onwards. Growth is never reported:
+#: EUDAMED is filling up, which is the expected state.
 RUECKGANG = 0.10
 
-#: Ein Wert, den es sicher nicht gibt. Er beantwortet die Frage, die man sonst
-#: raten müsste: **Was tut EUDAMED mit einem unbekannten Aufzählungswert?**
+#: A code value that certainly does not exist. It answers what would otherwise
+#: have to be guessed: **what does EUDAMED do with an unknown enumeration
+#: value?** Three answers are conceivable -- zero hits, all hits, or an error --
+#: and which one holds decides how a vanished code value can be recognised at
+#: all.
 #:
-#: Bei den Parameter*namen* ist es gemessen — sie werden stillschweigend
-#: verworfen. Bei den *Werten* wären drei Antworten denkbar: null Treffer, alle
-#: Treffer, oder eine Fehlermeldung. Davon hängt ab, woran ein verschwundener
-#: Codewert überhaupt zu erkennen ist.
-#:
-#: Am 2026-08-14 gemessen: **HTTP 400.** Damit wäre die naheliegende Prüfung
-#: („liefert der Wert noch Treffer?") wirkungslos gewesen — ein verschwundener
-#: Wert liefert gar keine Antwort, und eine ausbleibende Antwort hätte die erste
-#: Fassung dieser Datei stillschweigend übersprungen. Gemessen wird es trotzdem
-#: bei jedem Lauf: Die Antwort von heute ist keine Zusage für morgen.
+#: Measured 2026-08-14: **HTTP 400.** So the obvious check ("does the value
+#: still return hits?") would have been useless: a vanished value returns no
+#: answer at all. Measured on every run anyway, because today's answer is no
+#: promise for tomorrow.
 KANARIENVOGEL = ("riskClassCode", "refdata.risk-class.gibt-es-nicht")
 
 
 # ---------------------------------------------------------------------------
-# Die offizielle Schnittstelle — schärfer prüfbar als die UI-API
+# The official API -- testable more sharply than the UI API
 # ---------------------------------------------------------------------------
 #
-# Seit dem 2026-08-17 fährt das Werkzeug zwei Zugänge (client/capabilities.py).
-# Der offizielle hat als einziger einen veröffentlichten Vertrag, und er lässt
-# sich deshalb **direkt** prüfen statt über Trefferzahlvergleiche:
+# The official API is the only one with a published contract, so it can be
+# checked **directly** instead of through count comparisons:
 #
-#     UI-API        unbekannter Parameter -> still verworfen
-#                   => Wirkung nur aus dem Unterschied zweier Zählungen erschließbar
-#     offizielle    unbekannter Parameter -> HTTP 400
-#                   => die Zusage ist eine Ja/Nein-Frage
+#     UI API      unknown parameter -> silently discarded
+#                 => effect only inferable from the difference of two counts
+#     official    unknown parameter -> HTTP 400
+#                 => support is a yes/no question
 #
-# Das macht die Prüfung hier belastbarer als alles, was oben steht — und die
-# Gegenprobe (`OFFIZIELL_ABGELEHNT`) sogar zu einer Chance: Antwortet ein
-# abgelehnter Parameter plötzlich mit 200, ist eine Fähigkeit dazugekommen.
+# That also makes the counter-probe (`OFFIZIELL_ABGELEHNT`) worth running in
+# the other direction: a rejected parameter that suddenly answers 200 means a
+# capability has been added.
 
-#: Parameter, auf denen `client/official_client.py` steht. Müssen HTTP 200
-#: liefern — fällt einer aus, bricht der Zusatzpfad.
+#: Parameters `client/official_client.py` relies on. All must return HTTP 200;
+#: if one stops doing so, the official path breaks.
 OFFIZIELL_ANGENOMMEN: dict[str, str] = {
     "MF_SRN": "DE-MF-000006183",
     "PRIMARY_DI": "E4947662361",
     "NOMENCLATURE_CODE": " Q010601",
-    # Am 2026-08-17 von dieser Wacht selbst gefunden: OFFIZIELLE_API.md führte
-    # beide als „HTTP 400". Die Ablehnung galt dem WERT (`class-iii`), nicht
-    # dem Parameter — mit der Kennzahl filtern sie serverseitig.
+    # Measured 2026-08-17: docs/official-api.md listed both as "HTTP 400",
+    # but the rejection applied to the VALUE (`class-iii`), not the parameter.
+    # With the numeric id they filter server-side.
     "RISK_CLASS_ID": "-10.0",
     "APPLICABLE_LEGISLATION_ID": "-197.0",
 }
 
-#: Nachweislich abgelehnt (HTTP 400). Ein plötzliches 200 wäre keine Störung,
-#: sondern eine neue Fähigkeit: `RISK_CLASS_ID` etwa würde Fall C überflüssig
-#: machen und die Trefferliste serverseitig filterbar.
+#: Verifiably rejected (HTTP 400). A sudden 200 is not a fault but a new
+#: capability: `RISK_CLASS_ID` would make the result list filterable
+#: server-side instead of requiring local post-filtering.
 OFFIZIELL_ABGELEHNT: dict[str, str] = {
     "IMPLANTABLE": "true",
     "STERILE": "true",
@@ -367,23 +307,23 @@ OFFIZIELL_ABGELEHNT: dict[str, str] = {
     "DEVICE_STATUS_TYPE_ID": "-11.0",
 }
 
-#: Der Leerzeichen-Fehler: Die gespeicherten Nomenklaturwerte tragen eines
-#: (`" Q010601"`). `official_client.iter_udi` kapselt das. Verschwindet der
-#: Fehler, MUSS die Kapselung weg — sonst sucht sie ins Leere und liefert
-#: schweigend null Treffer.
+#: The leading-space quirk: stored nomenclature values carry one
+#: (`" Q010601"`). `official_client.iter_udi` compensates for it. If the quirk
+#: disappears, that compensation MUST go, otherwise it searches for a value
+#: that does not exist and returns zero records silently.
 LEERZEICHEN_PROBE = ("Q010601", " Q010601")
 
-#: Die Aufzählungstabellen aus `client/normalisierung.py` sind am echten
-#: Bestand belegt (1.880 Vergleiche, null Abweichungen — 2026-08-17). Geprüft
-#: wird hier nur, ob `/reference` sie überhaupt noch führt: Verschwände ein
-#: Schlüssel, stünde die Risikoklasse offiziell geholter Geräte auf NULL.
+#: The enumeration tables in `client/normalisierung.py` are backed by real data
+#: (1,880 comparisons, no deviations -- 2026-08-17). Checked here is only
+#: whether `/reference` still carries the keys: a missing key leaves the risk
+#: class of officially fetched devices null.
 REFERENZ_SCHLUESSEL = (("RISK_CLASS_ID", -10.0),
                        ("APPLICABLE_LEGISLATION_ID", -197.0),
                        ("DEVICE_STATUS_TYPE_ID", -11.0))
 
 
 # ---------------------------------------------------------------------------
-# Aufnahme
+# Snapshot
 # ---------------------------------------------------------------------------
 
 
@@ -392,18 +332,18 @@ def _jetzt() -> str:
 
 
 def _kurz(text: object, zeichen: int = 140) -> str:
-    """Eine Fehlermeldung auf Protokolllänge. Ein Verbindungsfehler aus
-    `requests` ist 400 Zeichen lang und sagt in den ersten 60 alles."""
+    """Shorten an error message to log length. A `requests` connection error
+    runs 400 characters and says everything in the first 60."""
     einzeilig = " ".join(str(text).split())
     return einzeilig if len(einzeilig) <= zeichen else einzeilig[:zeichen - 1] + "…"
 
 
 def _felder(eintrag: Any, praefix: str = "", tiefe: int = 2) -> list[str]:
-    """Die Feldnamen eines Datensatzes, verschachtelte mit Punkt.
+    """Field names of a record, nested ones joined with a dot.
 
-    Zwei Ebenen genügen und sind Absicht: Der Import liest `deviceStatusType.code`
-    und `tradeName.texts`, aber nichts darunter. Tiefer zu gehen hieße, jede
-    Umsortierung in den Textblöcken als Änderung zu melden.
+    Two levels are deliberate: consumers read `deviceStatusType.code` and
+    `tradeName.texts`, nothing below. Going deeper would report every
+    reordering inside the text blocks as a change.
     """
     if not isinstance(eintrag, dict) or tiefe <= 0:
         return []
@@ -419,23 +359,13 @@ def _felder(eintrag: Any, praefix: str = "", tiefe: int = 2) -> list[str]:
 
 
 def vollstaendig(aufnahme: dict[str, Any]) -> tuple[bool, str]:
-    """Taugt diese Aufnahme als Bezugspunkt für den nächsten Vergleich?
+    """Is this snapshot usable as a baseline for the next comparison?
 
-    Diese Prüfung ist am 2026-08-14 aus einem echten Fehlschlag entstanden: Die
-    erste Aufnahme lief mitten in einen DNS-Ausfall. Vier von fünf Beständen
-    waren nicht erreichbar, zwei der drei Filter blieben „unbekannt“ — und das
-    Ergebnis wurde als **Erstaufnahme** abgelegt und im Protokoll als
-    Ausgangszustand ausgewiesen.
-
-    Der Schaden daran ist nicht die verlorene Messung, die ist wiederholbar.
-    Der Schaden ist, dass die nächste Aufnahme gegen einen Bezugspunkt
-    verglichen hätte, in dem die halbe Schnittstelle fehlt: Ein Filter, der
-    nie gemessen wurde, kann nicht als ausgefallen auffallen. Ein Wächter mit
-    einem falschen Bezugspunkt ist schlimmer als keiner, weil er Ruhe meldet.
-
-    Verlangt wird deshalb das, was den Vergleich trägt: die Basiszahl, die
-    Feldnamen der Gerätesuche, ein Ergebnis für **jeden** Filter und die beiden
-    Zahlen, mit denen sich Codewerte überhaupt deuten lassen.
+    A snapshot taken during an outage is worse than none: a filter that was
+    never measured cannot later stand out as broken, so the comparison would
+    report calm. Required is what carries the comparison -- the base count, the
+    device-search field names, a result for **every** filter, and the two
+    measurements that make code values interpretable at all.
     """
     if not aufnahme.get("gesamt"):
         return False, "Gesamtbestand nicht messbar"
@@ -459,23 +389,22 @@ def vollstaendig(aufnahme: dict[str, Any]) -> tuple[bool, str]:
 
 @dataclass
 class Aenderung:
-    """Ein Unterschied zwischen zwei Aufnahmen."""
+    """A difference between two snapshots."""
 
     schwere: str   # 'kritisch' | 'auffaellig' | 'hinweis'
     bereich: str
     text: str
-    #: Was im Werkzeug davon abhängt. Ohne diesen Satz ist eine Meldung nur eine
-    #: Beobachtung, und niemand weiß, ob sie etwas bedeutet.
+    #: What breaks because of it. Without this sentence a finding is only an
+    #: observation.
     folge: str = ""
 
 
 def erhebe(client: Any, pause_s: float = PAUSE_S,
            melde: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """Nimmt den Zustand der Schnittstelle auf. Rein lesend, rund 34 Anfragen.
+    """Record the state of the interface. Read-only, roughly 34 requests.
 
-    Jeder Fehlschlag wird als Ergebnis festgehalten statt geworfen: Eine API, die
-    heute nicht antwortet, ist ein Befund und kein Grund, die Aufnahme zu
-    verlieren.
+    Every failure is stored as a result instead of raised: an API that does not
+    answer today is a finding, not a reason to lose the snapshot.
     """
     sagen = melde or (lambda _t: None)
 
@@ -485,18 +414,18 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
     def zaehle(**kwargs: Any) -> int | None:
         try:
             return client.count_devices(device_status=None, **kwargs)
-        except Exception as exc:  # noqa: BLE001 - ein Fehler ist hier ein Messwert
+        except Exception as exc:  # noqa: BLE001 - a failure is a measurement
             log.info("Zählabfrage fehlgeschlagen (%s): %s", kwargs, exc)
             return None
         finally:
             pause()
 
     def zustand(werte: dict[str, int | None], gesamt: int | None) -> str:
-        """Filtert dieser Parameter — gemessen am Unterschied seiner Werte?
+        """Does this parameter filter, judged by the spread of its values?
 
-        Bewusst ohne Bezug auf eine Referenzgruppe: Der Vergleich der Werte
-        untereinander braucht keinen stabilen Bezugspunkt und keine Gruppe, in
-        der der Filter überhaupt etwas wegnimmt (siehe FILTER).
+        Deliberately without a reference group: comparing the values against
+        each other needs no stable baseline and no group in which the filter
+        removes anything at all (see FILTER).
         """
         zahlen = [n for n in werte.values() if n is not None]
         if not gesamt or len(zahlen) < 2:
@@ -504,9 +433,9 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         spielraum = gesamt * TOLERANZ
         if max(zahlen) - min(zahlen) > spielraum:
             return "wirkt"
-        # Alle Werte liefern dasselbe. Zwei Möglichkeiten, und beide sind ein
-        # Ausfall: Der Parameter wird verworfen (dann ist es der Gesamtbestand)
-        # oder er trifft immer dasselbe.
+        # All values return the same count. Either the parameter is discarded
+        # (then this is the total) or it always matches the same set. Both are
+        # a failure.
         return "ignoriert"
 
     aufnahme: dict[str, Any] = {
@@ -530,7 +459,7 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         "fehler": [],
     }
 
-    # --- Datenstand ---------------------------------------------------------
+    # --- Data build ---------------------------------------------------------
     sagen("Datenstand")
     try:
         info = client.get_application_info()
@@ -539,7 +468,7 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         aufnahme["fehler"].append(f"applicationInfo: {_kurz(exc)}")
     pause()
 
-    # --- Basiszahl und Feldnamen der Gerätesuche ----------------------------
+    # --- Base count and field names of the device search --------------------
     sagen("Gerätesuche")
     basis = None
     try:
@@ -555,7 +484,7 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         pause()
     aufnahme["basis"] = basis
 
-    # --- Schalter der öffentlichen Seite ------------------------------------
+    # --- Feature switches of the public site --------------------------------
     sagen("Schalter der öffentlichen Seite")
     try:
         antwort = client.request(SCHALTER, {"scope": "PUBLIC",
@@ -567,32 +496,30 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         aufnahme["fehler"].append(f"Schalter: {_kurz(exc)}")
     pause()
 
-    # --- Der Gesamtbestand als Maßstab --------------------------------------
-    # Muss VOR allem anderen stehen: Ohne ihn ist weder die Filterwirkung noch
-    # eine Codewert-Trefferzahl deutbar.
+    # --- The total count as a yardstick -------------------------------------
+    # Must come BEFORE everything else: without it neither the filter effect
+    # nor a code-value count can be interpreted.
     sagen("Gesamtbestand")
     aufnahme["gesamt"] = zaehle()
 
-    # --- Wie reagiert EUDAMED auf einen Wert, den es nicht gibt? ------------
+    # --- How does EUDAMED react to a value that does not exist? -------------
     sagen("Kanarienvogel (erfundener Codewert)")
     kanarie = zaehle(extra_params={KANARIENVOGEL[0]: KANARIENVOGEL[1]})
     if kanarie is None:
-        # Kein Messfehler, sondern das Ergebnis: EUDAMED lehnt unbekannte Werte
-        # ab (am 2026-08-14 mit HTTP 400). Ein verschwundener Codewert liefert
-        # dann keine Zahl, sondern gar nichts — und genau daran ist er zu
-        # erkennen.
+        # Not a measurement error but the result: EUDAMED rejects unknown
+        # values (HTTP 400 as of 2026-08-14). A vanished code value then
+        # returns nothing at all, which is exactly how it is recognised.
         aufnahme["kanarienvogel"] = "fehler"
     elif aufnahme["gesamt"] and kanarie >= aufnahme["gesamt"] * (1 - TOLERANZ):
         aufnahme["kanarienvogel"] = "alles"
     else:
         aufnahme["kanarienvogel"] = "null"
 
-    # --- Filter und Codewerte in einem Durchgang ---------------------------
+    # --- Filters and code values in one pass --------------------------------
     #
-    # Der Kern der ganzen Datei. Je Parameter wird jeder zulässige Wert einzeln
-    # gezählt. Unterscheiden sich die Zahlen, filtert der Parameter; sind sie
-    # gleich, wird er verworfen. Und jede einzelne Zahl beantwortet zugleich, ob
-    # es diesen Codewert überhaupt noch gibt.
+    # Each permitted value is counted separately. Differing counts mean the
+    # parameter filters, identical ones mean it is discarded. Each individual
+    # count also shows whether that code value still exists.
     for parameter, eintrag in FILTER.items():
         werte: dict[str, int | None] = {}
         for wert in eintrag["werte"]:
@@ -605,7 +532,7 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
             "treffer": werte,
         }
 
-    # --- Die Kontrollprobe, auf der jedes „wirkt nicht" beruht --------------
+    # --- The control probe behind every "has no effect" ---------------------
     sagen("Kontrollprobe (erfundener Parametername)")
     kontrolle = zaehle(extra_params={KONTROLLE[0]: KONTROLLE[1]})
     aufnahme["kontrolle"] = (
@@ -613,11 +540,11 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         and abs(kontrolle - aufnahme["gesamt"]) <= aufnahme["gesamt"] * TOLERANZ
         else "abgelehnt" if kontrolle is None else "wirkt")
 
-    # --- Gibt es inzwischen Filter, die es vorher nicht gab? ----------------
+    # --- Are there filters now that did not exist before? -------------------
     #
-    # Die Gegenrichtung zur Filterprüfung oben: Dort geht es darum, dass nichts
-    # wegfällt. Hier darum, dass nichts Neues übersehen wird — ein Register im
-    # Aufbau bekommt Möglichkeiten dazu, und niemand kündigt sie an.
+    # The opposite direction of the filter check above: not that nothing is
+    # lost, but that nothing new is missed. A registry under construction gains
+    # capabilities, and nobody announces them.
     for name, eintrag in WUNSCHLISTE.items():
         sagen(f"Wunschliste: {name}")
         anzahl = zaehle(cnd_code=REFERENZ_CND,
@@ -632,12 +559,12 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
             zustand_w = "verworfen"
         aufnahme["wunschliste"][name] = {"zustand": zustand_w, "treffer": anzahl}
 
-    # --- Kann cndCode noch Präfix-Suche? -----------------------------------
+    # --- Does cndCode still do prefix search? -------------------------------
     #
-    # Trägt die gesamte Gruppensuche: „alle Dentalprodukte" ist eine Anfrage,
-    # solange der Elterncode seine Unterknoten miterfasst. Fiele das weg, müsste
-    # der EMDN-Baum lokal expandiert und je Blatt einzeln abgefragt werden — aus
-    # einer Anfrage würden dutzende, ohne dass ein Fehler aufträte.
+    # This carries every group query: "all dental products" is one request as
+    # long as the parent code covers its child nodes. Without it the EMDN tree
+    # would have to be expanded locally and queried leaf by leaf -- dozens of
+    # requests instead of one, and no error to show for it.
     kette: dict[str, int | None] = {}
     for code in PRAEFIXKETTE:
         sagen(f"Präfixprobe {code}")
@@ -650,9 +577,9 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         else "nein")
     aufnahme["praefixkette"] = kette
 
-    # --- Ist die Seitenzählung noch 0-basiert? -----------------------------
-    # Wäre sie 1-basiert, läge jede Trefferliste um eine Seite versetzt: Seite 0
-    # wäre leer oder gleich Seite 1, und niemand sähe es der Liste an.
+    # --- Is page numbering still 0-based? -----------------------------------
+    # If it were 1-based, every result list would be off by one page: page 0
+    # empty or identical to page 1, with nothing in the list to show it.
     sagen("Seitenzählung")
     try:
         s0 = client.search_devices(cnd_code=REFERENZ_CND, page=0, page_size=5,
@@ -668,7 +595,7 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         aufnahme["fehler"].append(f"Seitenzählung: {_kurz(exc)}")
     pause()
 
-    # --- Feldnamen der übrigen Bestände ------------------------------------
+    # --- Field names of the remaining data sets -----------------------------
     uuid = aufnahme.get("geraet_uuid")
     if uuid:
         sagen("Gerätedetail")
@@ -703,10 +630,9 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         aufnahme["fehler"].append(f"Herstellersuche: {_kurz(exc)}")
     pause()
 
-    # --- Seitengröße --------------------------------------------------------
-    # Sinkt die zulässige Seitengröße, verdreifacht sich still die Zahl der
-    # Anfragen für dieselbe Trefferliste — und die Zeitschätzung der Oberfläche
-    # stimmt nicht mehr.
+    # --- Page size ----------------------------------------------------------
+    # 300 is the largest page size the UI API accepts. If the limit drops, the
+    # number of requests for the same result list silently multiplies.
     sagen("Seitengröße")
     try:
         antwort = client.search_devices(cnd_code=REFERENZ_CND, page_size=300,
@@ -716,7 +642,7 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
         aufnahme["fehler"].append(f"Seitengröße: {_kurz(exc)}")
     pause()
 
-    # --- Die offizielle Schnittstelle ---------------------------------------
+    # --- The official API ---------------------------------------------------
     sagen("Offizielle Schnittstelle")
     aufnahme["offiziell"] = _erhebe_offiziell(client, pause, aufnahme["fehler"])
 
@@ -725,13 +651,12 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
 
 def _erhebe_offiziell(client: Any, pause: Callable[[], None],
                       fehler: list[str]) -> dict[str, Any]:
-    """Der zweite Zugang. Rund zehn Anfragen.
+    """The official API. Roughly ten requests.
 
-    Anders als oben wird hier nicht gezählt, sondern **gefragt**: Weil die
-    Gegenseite unbekannte Parameter mit HTTP 400 ablehnt, ist jede Zusage eine
-    Ja/Nein-Frage statt eines Trefferzahlvergleichs. Das ist die belastbarste
-    Messung in dieser Datei — und sie geht in beide Richtungen: Ein abgelehnter
-    Parameter, der plötzlich antwortet, ist eine neue Fähigkeit.
+    Nothing is counted here, it is asked: because this endpoint rejects unknown
+    parameters with HTTP 400, every supported parameter is a yes/no question
+    rather than a count comparison. It works in both directions -- a rejected
+    parameter that suddenly answers is a new capability.
     """
     from client.eudamed_client import DATALAKE_URL
 
@@ -741,7 +666,7 @@ def _erhebe_offiziell(client: Any, pause: Callable[[], None],
     }
 
     def frage(params: dict[str, str]) -> tuple[int | None, Any]:
-        """(HTTP-Status, Nutzdaten). Ein Fehler ist hier ein Messwert."""
+        """(HTTP status, payload). A failure is a measurement here."""
         try:
             antwort = client.request(
                 "/udi", {"format": "json", "api-version": "v1.0", **params},
@@ -757,7 +682,7 @@ def _erhebe_offiziell(client: Any, pause: Callable[[], None],
         status, daten = frage({name: wert})
         saetze = len((daten or {}).get("value") or []) if daten else 0
         befund["angenommen"][name] = {"status": status, "saetze": saetze}
-        # Erste Seite: Cursor und Seitengröße nebenbei mitnehmen.
+        # First page: pick up cursor and page size along the way.
         if daten and befund["cursor"] is None and saetze:
             befund["cursor"] = bool((daten or {}).get("nextLink"))
             befund["seitengroesse"] = saetze
@@ -766,14 +691,14 @@ def _erhebe_offiziell(client: Any, pause: Callable[[], None],
         status, _ = frage({name: wert})
         befund["abgelehnt"][name] = {"status": status}
 
-    # Der Leerzeichen-Fehler: ohne -> 0 Treffer, mit -> viele.
+    # The leading-space quirk: without -> 0 hits, with -> many.
     ohne, mit = LEERZEICHEN_PROBE
     for etikett, wert in (("ohne", ohne), ("mit", mit)):
         _, daten = frage({"NOMENCLATURE_CODE": wert})
         befund["leerzeichen"][etikett] = len((daten or {}).get("value") or []) \
             if daten else None
 
-    # Führt /reference die Schlüssel noch, auf denen die Normalisierung steht?
+    # Does /reference still carry the keys the normalisation relies on?
     try:
         from client.official_client import OfficialClient
 
@@ -789,27 +714,25 @@ def _erhebe_offiziell(client: Any, pause: Callable[[], None],
 
 
 # ---------------------------------------------------------------------------
-# Vergleich
+# Comparison
 # ---------------------------------------------------------------------------
 
 
 def _vergleiche_offiziell(alt: dict[str, Any],
                           neu: dict[str, Any]) -> list[Aenderung]:
-    """Was sich am zweiten Zugang geändert hat.
+    """What changed on the official API.
 
-    Die Bewertung folgt der Frage, was im Werkzeug kaputtgeht:
+    Severity follows what breaks:
 
-      * Ein **angenommener** Parameter, der ausfällt, bricht den Zusatzpfad —
+      * An **accepted** parameter that fails breaks the official path --
         `kritisch`.
-      * Ein **abgelehnter**, der plötzlich antwortet, ist eine neue Fähigkeit —
-        `hinweis`, aber mit Handlungsaufforderung: `RISK_CLASS_ID` etwa machte
-        Fall C überflüssig.
-      * Der **Leerzeichen-Fehler**, der verschwindet, ist gefährlicher als er
-        klingt: Die Kapselung in `official_client.py` stellt dem Wert ein
-        Leerzeichen voran, und ohne den Fehler findet sie nichts mehr —
-        schweigend.
-      * Ein fehlender **Referenzschlüssel** lässt die Risikoklasse offiziell
-        geholter Geräte auf NULL stehen.
+      * A **rejected** one that suddenly answers is a new capability --
+        `hinweis`.
+      * The **leading-space quirk** disappearing is more dangerous than it
+        sounds: `official_client.py` prepends a space to the value, and
+        without the quirk it finds nothing -- silently.
+      * A missing **reference key** leaves the risk class of officially
+        fetched devices null.
     """
     aenderungen: list[Aenderung] = []
     if not alt or not neu:
@@ -873,11 +796,10 @@ def _vergleiche_offiziell(alt: dict[str, Any],
 
 
 def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
-    """Was hat sich seit der letzten Aufnahme geändert?
+    """What changed since the last snapshot.
 
-    Die Reihenfolge der Prüfungen ist die Reihenfolge ihrer Wichtigkeit, und die
-    Schwere richtet sich danach, was im Werkzeug kaputtgeht — nicht danach, wie
-    groß die Änderung aussieht.
+    Checks run in order of importance, and severity follows what breaks, not
+    how large the change looks.
     """
     aenderungen: list[Aenderung] = []
 
@@ -889,13 +811,13 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
             "Diese Aufnahme gilt als Erstaufnahme; verglichen wird erst wieder "
             "mit der nächsten.")]
 
-    # --- Die offizielle Schnittstelle --------------------------------------
-    # Steht vor den Filtern, weil ihre Zusagen hart geprüft sind: Ein 400 statt
-    # eines 200 ist eine Tatsache, keine Erschließung aus zwei Zählungen.
+    # --- The official API ---------------------------------------------------
+    # Before the filters, because its answers are hard evidence: a 400 instead
+    # of a 200 is a fact, not an inference from two counts.
     aenderungen += _vergleiche_offiziell(alt.get("offiziell") or {},
                                          neu.get("offiziell") or {})
 
-    # --- Filter: der kritische Teil ----------------------------------------
+    # --- Filters: the critical part -----------------------------------------
     for name, neuer in (neu.get("filter") or {}).items():
         alter = (alt.get("filter") or {}).get(name)
         if not alter:
@@ -915,11 +837,10 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
                 f"`{name}` wirkt wieder.",
                 f"Die Einschränkung nach {neuer['zweck']} ist wieder verlässlich."))
 
-    # --- Schalter der öffentlichen Seite -----------------------------------
+    # --- Feature switches of the public site --------------------------------
     #
-    # Ein Schalter, der angeht, ist die einzige Meldung dieser Wacht, die eine
-    # neue MÖGLICHKEIT ankündigt statt eines Schadens. Deshalb „auffaellig" und
-    # nicht „kritisch" — aber mit dem Satz, was daraus folgt.
+    # A switch turning on is the only finding here that announces a new
+    # CAPABILITY rather than damage, hence `auffaellig` and not `kritisch`.
     for name, jetzt in (neu.get("schalter") or {}).items():
         vorher = (alt.get("schalter") or {}).get(name)
         if vorher is None or vorher == jetzt:
@@ -940,7 +861,7 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
             "EUDAMED hat der öffentlichen Seite etwas hinzugefügt. Ob es das "
             "Werkzeug betrifft, entscheidet ein Blick in die Beschreibung."))
 
-    # --- Die Kontrollprobe: die Annahme unter allen „wirkt nicht" ----------
+    # --- The control probe: the assumption under every "has no effect" ------
     if (alt.get("kontrolle") == "verworfen"
             and neu.get("kontrolle") not in (None, "verworfen")):
         aenderungen.append(Aenderung(
@@ -951,7 +872,7 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
             "ignoriert“. Die Aussagen dieser Wacht zu wirkungslosen Parametern "
             "gehören neu bewertet — und ../FILTER_MATRIX.md ebenso."))
 
-    # --- Wunschliste: was es vorher nicht gab -------------------------------
+    # --- Wishlist: what did not exist before --------------------------------
     for name, neuer in (neu.get("wunschliste") or {}).items():
         alter = (alt.get("wunschliste") or {}).get(name)
         if not alter or alter["zustand"] == neuer["zustand"]:
@@ -971,7 +892,7 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
                 "Falls das Werkzeug diesen Filter inzwischen nutzt, sucht es ab "
                 "sofort ungefiltert."))
 
-    # --- Präfixsuche und Seitenzählung -------------------------------------
+    # --- Prefix search and page numbering -----------------------------------
     if alt.get("praefixsuche") == "ja" and neu.get("praefixsuche") == "nein":
         aenderungen.append(Aenderung(
             "kritisch", "Präfixsuche",
@@ -991,19 +912,18 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
             "Jede mehrseitige Trefferliste wäre um eine Seite versetzt: erste "
             "Seite doppelt, letzte fehlt."))
 
-    # --- Vokabular ----------------------------------------------------------
+    # --- Vocabulary ---------------------------------------------------------
     #
-    # Woran erkennt man einen verschwundenen Codewert? Das hängt davon ab, was
-    # EUDAMED mit einem unbekannten Wert macht, und genau das misst der
-    # Kanarienvogel bei jedem Lauf mit:
+    # How a vanished code value shows up depends on what EUDAMED does with an
+    # unknown value, which the canary measures on every run:
     #
-    #   Kanarienvogel == 0        unbekannte Werte filtern -> 0 ist das Signal
-    #   Kanarienvogel == gesamt   unbekannte Werte werden ignoriert
-    #                             -> „alle Treffer" ist das Signal
+    #   canary == 0        unknown values filter -> 0 is the signal
+    #   canary == total    unknown values are ignored -> "all hits" is the
+    #                      signal
     #
-    # Ohne diese Unterscheidung wäre die Prüfung im zweiten Fall wirkungslos:
-    # Ein verschwundener Wert lieferte dann drei Millionen Treffer und sähe aus
-    # wie ein besonders erfolgreicher Filter.
+    # Without that distinction the check would be useless in the second case: a
+    # vanished value would return millions of hits and look like a
+    # particularly successful filter.
     kanarie, gesamt = neu.get("kanarienvogel"), neu.get("gesamt")
     for wert, anzahl in (neu.get("vokabular") or {}).items():
         vorher = (alt.get("vokabular") or {}).get(wert)
@@ -1035,7 +955,7 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
             "Codewert zu erkennen ist. Die Prüfung stellt sich automatisch "
             "darauf ein."))
 
-    # --- Feldnamen ----------------------------------------------------------
+    # --- Field names --------------------------------------------------------
     for bestand, felder in (neu.get("felder") or {}).items():
         vorher = set((alt.get("felder") or {}).get(bestand) or [])
         jetzt = set(felder or [])
@@ -1059,7 +979,7 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
                 "Kein Schaden. Möglicherweise aber eine neue Auskunft, die das "
                 "Werkzeug bisher nicht anbietet."))
 
-    # --- Datenstand und Mengen ---------------------------------------------
+    # --- Data build and volumes ---------------------------------------------
     if alt.get("build") and neu.get("build") and alt["build"] != neu["build"]:
         aenderungen.append(Aenderung(
             "auffaellig", "Datenstand",
@@ -1089,12 +1009,12 @@ def vergleiche(alt: dict[str, Any], neu: dict[str, Any]) -> list[Aenderung]:
 
 
 # ---------------------------------------------------------------------------
-# Ablage und Protokoll
+# Storage and log
 # ---------------------------------------------------------------------------
 
 
 def letzte_aufnahme(verzeichnis: Path = AUFNAHMEN) -> tuple[Path, dict[str, Any]] | None:
-    """Die jüngste Aufnahme — oder None, wenn es noch keine gibt."""
+    """The most recent snapshot, or None if there is none yet."""
     dateien = sorted(verzeichnis.glob("aufnahme_*.json"))
     for pfad in reversed(dateien):
         try:
@@ -1106,7 +1026,7 @@ def letzte_aufnahme(verzeichnis: Path = AUFNAHMEN) -> tuple[Path, dict[str, Any]
 
 def faellig(verzeichnis: Path = AUFNAHMEN,
             abstand_tage: int = ABSTAND_TAGE) -> tuple[bool, float | None]:
-    """Ist eine neue Aufnahme fällig? Rückgabe: (fällig, Tage seit der letzten)."""
+    """Is a new snapshot due? Returns (due, days since the last one)."""
     vorher = letzte_aufnahme(verzeichnis)
     if vorher is None:
         return True, None
@@ -1120,12 +1040,11 @@ def faellig(verzeichnis: Path = AUFNAHMEN,
 
 def _protokolliere(aenderungen: list[Aenderung], aufnahme: dict[str, Any],
                    tage: float | None, pfad: Path = PROTOKOLL) -> None:
-    """Hängt einen Abschnitt an das Protokoll. Auch „nichts geändert" wird notiert.
+    """Append a section to the log. "No changes" is recorded too.
 
-    Das ist kein Formalismus: Ein Protokoll, in dem nur Änderungen stehen, lässt
-    offen, ob in der Zwischenzeit nichts passiert ist oder nur niemand
-    nachgesehen hat. Der Unterschied ist derselbe wie zwischen „keine Angabe in
-    EUDAMED“ und „nicht abgefragt“, und er zieht sich durch dieses ganze Projekt.
+    A log holding only changes leaves open whether nothing happened or nobody
+    looked -- the same difference as between "not recorded in EUDAMED" and "not
+    queried".
     """
     datum = aufnahme["zeitpunkt"][:10]
     if tage is None:
@@ -1135,10 +1054,9 @@ def _protokolliere(aenderungen: list[Aenderung], aufnahme: dict[str, Any],
                    else f"{tage:.0f} Tage seit der letzten Aufnahme")
     schwer = sum(1 for a in aenderungen if a.schwere == "kritisch")
 
-    # Ein Formatwechsel ist kein Befund über EUDAMED, sondern über diese Datei:
-    # Verglichen wurde nichts. Dann gehört der Ausgangszustand noch einmal
-    # aufgeschrieben — sonst steht im Protokoll eine Aufnahme, deren neue
-    # Prüfungen nirgends festgehalten sind.
+    # A format change is a finding about this file, not about EUDAMED: nothing
+    # was compared. The baseline is then written out again, otherwise the log
+    # holds a snapshot whose new checks are recorded nowhere.
     neubeginn = tage is None or any(a.bereich == "Aufnahme" for a in aenderungen)
 
     kopf = f"## {datum} — "
@@ -1218,13 +1136,11 @@ def laufe(client: Any, *, verzeichnis: Path = AUFNAHMEN,
           protokoll: Path = PROTOKOLL, pause_s: float = PAUSE_S,
           melde: Callable[[str], None] | None = None,
           ) -> tuple[dict[str, Any], list[Aenderung]]:
-    """Eine Aufnahme: messen, vergleichen, ablegen, protokollieren.
+    """One snapshot: measure, compare, store, log.
 
-    Eine unvollständige Aufnahme wird **nicht** zum Bezugspunkt. Sie landet
-    unter anderem Namen (`unbrauchbar_*.json`), den `letzte_aufnahme()` nicht
-    findet, und im Protokoll steht, was fehlte. Beim nächsten Start ist die
-    Aufnahme dann weiterhin fällig — was genau richtig ist: Gemessen wurde ja
-    nichts.
+    An incomplete snapshot does **not** become a baseline. It is stored under a
+    different name (`unbrauchbar_*.json`) that `letzte_aufnahme()` does not
+    find, the log records what was missing, and the snapshot stays due.
     """
     vorher = letzte_aufnahme(verzeichnis)
     _, tage = faellig(verzeichnis)
@@ -1251,18 +1167,16 @@ def starte_im_hintergrund(client_bauen: Callable[[], Any], *,
                           abstand_tage: int = ABSTAND_TAGE,
                           verzoegerung_s: float = VERZOEGERUNG_S,
                           erzwingen: bool = False) -> threading.Thread | None:
-    """Startet die Wacht nebenher, wenn sie fällig ist. Sonst passiert nichts.
+    """Run a snapshot in a background thread if one is due. Otherwise a no-op.
 
-    Drei Zusagen, und alle drei sind wichtiger als die Messung selbst:
+    Three guarantees:
 
-    1. **Der Start der Oberfläche wartet nie.** Eigener Thread, `daemon=True`.
-    2. **Ein Fehlschlag bleibt folgenlos.** Was hier schiefgeht, darf die
-       Recherche nicht stören — ein Werkzeug, das wegen seiner eigenen
-       Selbstüberwachung nicht startet, wäre eine sehr dumme Art zu scheitern.
-    3. **Eigener Client.** Nicht der der Sitzung: Der steht unter deren Sperre,
-       und die Wacht hätte sie sonst eine Minute lang in der Hand.
+    1. **The caller never waits.** Own thread, `daemon=True`.
+    2. **A failure stays without consequence** for the calling program.
+    3. **Own client.** A shared one is held under its own lock, which this
+       would occupy for about a minute.
 
-    Rückgabe: der Thread, oder None, wenn keine Aufnahme fällig war.
+    Returns the thread, or None if no snapshot was due.
     """
     ist_faellig, tage = faellig(abstand_tage=abstand_tage)
     if not (ist_faellig or erzwingen):
@@ -1274,7 +1188,7 @@ def starte_im_hintergrund(client_bauen: Callable[[], Any], *,
         time.sleep(verzoegerung_s)
         try:
             _, aenderungen = laufe(client_bauen())
-        except Exception as exc:  # noqa: BLE001 - siehe Zusage 2
+        except Exception as exc:  # noqa: BLE001 - see guarantee 2
             log.warning("API-Wacht fehlgeschlagen: %s", exc)
             print(f"API-Wacht: Aufnahme fehlgeschlagen ({exc}). "
                   f"Die Recherche ist davon nicht betroffen.")
@@ -1317,7 +1231,7 @@ if __name__ == "__main__":
         print(f"Letzte Aufnahme vor {tage:.0f} Tagen, nächste in "
               f"{ABSTAND_TAGE - tage:.0f} Tagen. Erzwingen mit --jetzt.")
         sys.exit(0)
-    # Eigener Client ohne Lese-Cache: Die Wacht soll messen, nicht erinnern.
+    # Own client without a read cache: measure, do not remember.
     _, aenderungen = laufe(EudamedClient(cache_max_age_s=0), melde=print)
     kritisch = [a for a in aenderungen if a.schwere == "kritisch"]
     print(f"Fertig: {len(aenderungen)} Änderung(en), davon {len(kritisch)} kritisch. "

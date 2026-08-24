@@ -1,20 +1,19 @@
-"""Probe 04 — Wie kommt man vom Suchtreffer zum Zertifikat? (KRITISCH)
+"""Probe 04 — from a search hit to the certificate data.
 
-Frage: Wie erreicht man die gerätegenauen Zertifikatsdaten von einem Suchtreffer aus?
-
-GELÖST am 2026-07-30 durch Mitschnitt des EUDAMED-UI-Traffics:
+Question: how are device-level certificate data reached from a search hit?
 
     GET /devices/basicUdiData/udiDiData/{deviceUuid}
 
-Man übergibt die **Geräte-UUID** aus dem Suchergebnis, keine separate Basic-UDI-ID.
-Die `basicUdiDiDataUlid` wird dafür gar nicht gebraucht. Die openregulatory-Spec nennt
-`/devices/basicUdiData/{basicUdiDiId}` — dieser Pfad existiert zwar (er antwortet mit
-404 statt mit einem Redirect), ist aber über keine ID aus dem Suchergebnis erreichbar.
+The path is undocumented -- read off the EUDAMED web UI's own traffic, so it
+can change without notice. It takes the **device UUID** from the search result,
+not a separate Basic UDI id; `basicUdiDiDataUlid` is not needed for it. The openregulatory
+spec names `/devices/basicUdiData/{basicUdiDiId}` instead — that path exists
+(it answers 404 rather than redirecting), but it cannot be reached from any id
+in the search result.
 
-Diese Probe hält das fest und misst zusätzlich die **Datenabdeckung**: wie viele
-Geräte haben überhaupt hinterlegte Zertifikate? Das ist für die Auswertung wichtiger
-als der Endpunkt selbst — ein leeres `deviceCertificateInfoList` heißt nicht
-"unzertifiziert", sondern "vom Hersteller nicht eingetragen".
+The probe also measures data coverage: how many devices carry certificate
+entries at all. An empty `deviceCertificateInfoList` means "not entered by the
+manufacturer", not "uncertified".
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ TITLE = "Weg vom Suchtreffer zum Zertifikat"
 QUESTION = "Wie erreicht man deviceCertificateInfoList von einem Suchtreffer aus?"
 
 REFERENCE_CND = "Q010601"
-#: So viele Geräte für die Abdeckungsmessung. Jedes kostet einen Request.
+#: Devices sampled for the coverage measurement; each one costs a request.
 SAMPLE_SIZE = 12
 
 
@@ -54,7 +53,7 @@ def run(client: EudamedClient) -> ProbeResult:
         f"`basicUdiDataUuid` = `{entry.get('basicUdiDataUuid')}`"
     )
 
-    # --- Der Weg, den die UI geht ----------------------------------------------
+    # --- The path the UI itself uses --------------------------------------------
     working, err_working = call(client.get_basic_udi_by_device, device_uuid)
     result.requests_made += 1
     if err_working or working is None:
@@ -78,7 +77,7 @@ def run(client: EudamedClient) -> ProbeResult:
         if isinstance(value, dict):
             result.add(f"`{key}.code`: `{value.get('code')}`")
 
-    # --- Gegenprobe: der Pfad aus der openregulatory-Spec ------------------------
+    # --- Counter-check: the path from the openregulatory spec -------------------
     ulid = entry.get("basicUdiDiDataUlid")
     if ulid:
         _, err_spec = call(
@@ -91,7 +90,7 @@ def run(client: EudamedClient) -> ProbeResult:
         )
         result.data["spec_path_error"] = err_spec
 
-    # --- Datenabdeckung ---------------------------------------------------------
+    # --- Data coverage ----------------------------------------------------------
     with_certs = 0
     total_certs = 0
     type_codes: Counter = Counter()

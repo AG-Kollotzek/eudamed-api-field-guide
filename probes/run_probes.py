@@ -1,12 +1,12 @@
-"""Runner für die Probe-Skripte.
+"""Runner for the probe scripts.
 
-    python -m probes.run_probes                  # alle Probes, Bericht nach PROBE_RESULTS.md
-    python -m probes.run_probes --only 04        # nur eine
-    python -m probes.run_probes --no-cache       # Cache umgehen, frisch abfragen
-    python -m probes.run_probes -v               # HTTP-Log mitschreiben
+    python -m probes.run_probes                  # all probes, report to PROBE_RESULTS.md
+    python -m probes.run_probes --only 04        # a single probe
+    python -m probes.run_probes --no-cache       # bypass the cache, query fresh
+    python -m probes.run_probes -v               # log HTTP traffic
 
-Eine fehlgeschlagene Probe bricht den Lauf nicht ab — bei einer so wackligen API
-wäre das nur lästig.
+A failing probe does not abort the run; EUDAMED returns HTTP 500 often enough
+that aborting would end most runs early.
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         probe_started = time.monotonic()
         try:
             result = module.run(client)
-        except Exception as exc:  # noqa: BLE001 - ein Absturz darf den Lauf nicht beenden
+        except Exception as exc:  # noqa: BLE001 - a crash must not end the run
             result = ProbeResult(module.PROBE_ID, module.TITLE, module.QUESTION)
             result.conclude(Verdict.ERROR, f"Probe abgestürzt: {type(exc).__name__}: {exc}")
         results.append(result)

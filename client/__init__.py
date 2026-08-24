@@ -1,4 +1,4 @@
-"""API-Client für EUDAMED."""
+"""API client for EUDAMED."""
 
 from client.eudamed_client import (
     ActorType,

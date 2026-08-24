@@ -1,12 +1,12 @@
-"""Probe 02 — Paginierungsmechanik.
+"""Probe 02 — pagination mechanics.
 
-Fragen:
-  a) Ist `page` 0- oder 1-basiert? (Die Repos widersprechen sich.)
-  b) Ist `size` wirklich bei 300 gedeckelt, oder geht mehr?
-  c) Liefert `size=1` zuverlässig `totalElements`? (Grundlage von count_devices)
+Questions:
+  a) Is `page` 0- or 1-based? (Published clients disagree.)
+  b) Is `size` really capped at 300, or does more get through?
+  c) Does `size=1` reliably return `totalElements`? (basis of `count_devices()`)
 
-Methode für (a): Seite 0 und Seite 1 abrufen und die Treffer vergleichen. Wären
-sie 1-basiert, müsste `page=0` entweder fehlschlagen oder dasselbe liefern wie `page=1`.
+Method for (a): fetch page 0 and page 1 and compare the hits. If paging were
+1-based, `page=0` would either fail or return the same entries as `page=1`.
 """
 
 from __future__ import annotations
@@ -18,14 +18,14 @@ PROBE_ID = "02"
 TITLE = "Paginierung: 0- oder 1-basiert, Größenlimit"
 QUESTION = "Wie verhalten sich page/pageSize/size wirklich?"
 
-#: Dentallegierungen — der von Delapro/EUDAMED verifizierte Referenzfall, groß genug für mehrere Seiten.
+#: Dental alloys — a CND code with enough devices to span several pages.
 REFERENCE_CND = "Q010601"
 
 
 def run(client: EudamedClient) -> ProbeResult:
     result = ProbeResult(PROBE_ID, TITLE, QUESTION)
 
-    # --- (a) 0- oder 1-basiert? -------------------------------------------------
+    # --- (a) 0- or 1-based? -----------------------------------------------------
     page0, err0 = call(client.search_devices, cnd_code=REFERENCE_CND, page=0, page_size=5)
     page1, err1 = call(client.search_devices, cnd_code=REFERENCE_CND, page=1, page_size=5)
     result.requests_made += 2
@@ -62,7 +62,7 @@ def run(client: EudamedClient) -> ProbeResult:
             zero_based = None
         result.data["zero_based"] = zero_based
 
-    # --- (b) Größenlimit --------------------------------------------------------
+    # --- (b) size limit ---------------------------------------------------------
     for requested in (300, 500):
         response, error = call(
             client.search_devices,
@@ -80,8 +80,8 @@ def run(client: EudamedClient) -> ProbeResult:
         )
         result.data[f"size_{requested}"] = {"size": reported, "numberOfElements": returned}
 
-    # Hinweis: search_devices deckelt selbst bei MAX_PAGE_SIZE. Für den 500er-Test
-    # deshalb einmal am Deckel vorbei, um das echte Serververhalten zu sehen.
+    # `search_devices` caps page_size at MAX_PAGE_SIZE itself, so the 500 test
+    # bypasses the cap to observe the server's own behaviour.
     raw500, err500 = call(
         client.request,
         "/devices/udiDiData",
@@ -103,7 +103,7 @@ def run(client: EudamedClient) -> ProbeResult:
             "numberOfElements": raw500.data.get("numberOfElements"),
         }
 
-    # --- (c) size=1 als Zähltrick ----------------------------------------------
+    # --- (c) size=1 as a counting trick -----------------------------------------
     counter, err_counter = call(client.search_devices, cnd_code=REFERENCE_CND, page=0, page_size=1)
     result.requests_made += 1
     if err_counter or counter is None:

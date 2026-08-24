@@ -1,16 +1,17 @@
-"""Probe 07 — Kann die offizielle Datalake-API mehr als Einzelabfragen?
+"""Probe 07 — can the official Datalake API do more than single lookups?
 
-Frage: Delapro/EUDAMED nennt eine inzwischen offizielle API
+Question: the official API
 
     https://api.datalake.sante.service.ec.europa.eu/eudamed/udi?PRIMARY_DI=...&format=json&api-version=v1.0
 
-kennt aber nur den Zugriff über `PRIMARY_DI`. Wenn die auch eine Gruppensuche
-könnte, wäre sie die deutlich stabilere Grundlage als die UI-API — deshalb einmal
-abklopfen, bevor wir uns dauerhaft auf die inoffizielle Variante festlegen.
+is only known to support access by `PRIMARY_DI`. If it also supported group
+queries it would be a considerably more stable basis than the unofficial UI
+API.
 
-Getestet wird: Einzelabfrage, Abruf ohne Filter, ein EMDN-Filter unter mehreren
-plausiblen Namen, OData-`$filter`/`$top`, und ein paar naheliegende Schwester-
-Ressourcen. Alles Raten — aber billiges Raten mit klarer Auswertung.
+Tested: the documented single lookup, a request without filters, an EMDN filter
+under several plausible parameter names, OData `$filter`/`$top`, and a few
+adjacent resources. Everything beyond the documented lookup is guessed: a zero
+result says nothing about the API, only about the guessed name.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ def _get(client: EudamedClient, path: str, params: dict[str, Any]) -> tuple[Any,
 def run(client: EudamedClient) -> ProbeResult:
     result = ProbeResult(PROBE_ID, TITLE, QUESTION)
 
-    # --- Referenzfall: klappt der dokumentierte Aufruf überhaupt? ---------------
+    # --- Reference case: does the documented call work at all? ------------------
     response, error = _get(client, "/udi", {"PRIMARY_DI": REFERENCE_PRIMARY_DI})
     result.requests_made += 1
     if error or response is None:
@@ -71,7 +72,7 @@ def run(client: EudamedClient) -> ProbeResult:
                 result.data["cert_fields"] = cert_fields
         result.data["reference_call"] = "ok"
 
-    # --- Geht es auch ohne Filter (= Listenabruf)? ------------------------------
+    # --- Does it work without a filter (plain listing)? -------------------------
     listing, err_listing = _get(client, "/udi", {})
     result.requests_made += 1
     if err_listing or listing is None:
@@ -83,7 +84,7 @@ def run(client: EudamedClient) -> ProbeResult:
         result.add(f"Abruf ohne Filter -> ✅ {count} Datensätze (Listenabruf möglich!)")
         result.data["listing"] = True
 
-    # --- Gibt es einen Gruppen-/EMDN-Filter? ------------------------------------
+    # --- Is there a group / EMDN filter? ----------------------------------------
     group_params = [
         {"CND_CODE": "Q010601"},
         {"EMDN_CODE": "Q010601"},
@@ -106,7 +107,7 @@ def run(client: EudamedClient) -> ProbeResult:
             result.add(f"`{name}={params[name]}` -> ✅ {count} Datensätze")
     result.data["group_params"] = group_findings
 
-    # --- Schwester-Ressourcen ---------------------------------------------------
+    # --- Adjacent resources -----------------------------------------------------
     sibling_findings: dict[str, str] = {}
     for path in ("/certificate", "/certificates", "/actor", "/actors", "/device"):
         response, error = _get(client, path, {})

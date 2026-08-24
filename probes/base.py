@@ -1,8 +1,8 @@
-"""Gemeinsame Infrastruktur für die Probe-Skripte.
+"""Shared infrastructure for the probe scripts.
 
-Jede Probe stellt genau eine Frage an die Schnittstelle und endet mit einem
-Verdikt. Die Fragen stammen aus der Sichtung der beiden Referenz-Repos
-(openregulatory/eudamed-api, Delapro/EUDAMED) — siehe README.
+Each probe asks exactly one question about the API and ends with a verdict.
+Verdicts and report texts are German, since they end up in the generated
+report verbatim.
 """
 
 from __future__ import annotations
@@ -44,10 +44,10 @@ class ProbeResult:
 
 
 def call(fn: Callable[..., EudamedResponse], *args: Any, **kwargs: Any) -> tuple[EudamedResponse | None, str | None]:
-    """Ruft eine Client-Methode auf und fängt erwartbare Fehler ab.
+    """Calls a client method and turns expected errors into a message.
 
-    Ein Fehlschlag ist hier kein Abbruchgrund, sondern selbst ein Messergebnis:
-    ein 404 auf einen geratenen Endpunkt beantwortet die Frage genauso wie ein 200.
+    A failure is a measurement, not a reason to abort: a 404 on a guessed
+    endpoint answers the question just as well as a 200 does.
     """
     try:
         return fn(*args, **kwargs), None
@@ -55,15 +55,14 @@ def call(fn: Callable[..., EudamedResponse], *args: Any, **kwargs: Any) -> tuple
         return None, f"HTTP {exc.status_code}"
     except EudamedError as exc:
         return None, str(exc)
-    except Exception as exc:  # noqa: BLE001 - Probes sollen nie den Runner abbrechen
+    except Exception as exc:  # noqa: BLE001 - a probe must never abort the runner
         return None, f"{type(exc).__name__}: {exc}"
 
 
 def find_keys(obj: Any, needle: str, path: str = "$") -> list[tuple[str, Any]]:
-    """Sucht rekursiv nach Schlüsseln, deren Name `needle` enthält (case-insensitiv).
+    """Recursively finds keys whose name contains `needle`, case-insensitively.
 
-    Wird gebraucht, um in großen Antworten überhaupt erst zu finden, wo eine
-    gesuchte ID stecken könnte.
+    Used to locate where an ID sits inside the deeply nested responses.
     """
     hits: list[tuple[str, Any]] = []
     if isinstance(obj, dict):
@@ -73,13 +72,13 @@ def find_keys(obj: Any, needle: str, path: str = "$") -> list[tuple[str, Any]]:
                 hits.append((here, value))
             hits.extend(find_keys(value, needle, here))
     elif isinstance(obj, list):
-        for index, item in enumerate(obj[:5]):  # erste 5 reichen zur Strukturerkennung
+        for index, item in enumerate(obj[:5]):  # first 5 suffice to see the structure
             hits.extend(find_keys(item, needle, f"{path}[{index}]"))
     return hits
 
 
 def find_uuid_values(obj: Any, path: str = "$", limit: int = 40) -> list[tuple[str, str]]:
-    """Sammelt alle Werte, die wie eine UUID aussehen."""
+    """Collects up to `limit` values that look like a UUID."""
     hits: list[tuple[str, str]] = []
     if len(hits) >= limit:
         return hits

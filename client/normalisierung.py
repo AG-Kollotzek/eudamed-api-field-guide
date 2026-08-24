@@ -1,55 +1,46 @@
-"""Offizielle Datensätze in die Form bringen, die `db/store.py` schon kennt.
+"""Translate official Datalake records into the shape of the UI API.
 
     from client.normalisierung import als_suchtreffer, als_detail
 
-    store.upsert_devices_from_search([als_suchtreffer(s) for s in saetze])
-    store.upsert_device_detail(uuid, als_detail(satz))
+    treffer = [als_suchtreffer(satz) for satz in saetze]
+    detail = als_detail(satz)
 
-Damit gilt die Auflage „einheitliches Datenschema" wörtlich: **dieselben
-Upserts, dieselben Tabellen, dieselben Spalten.** Es gibt keinen zweiten
-Speicherweg und keine Parallelfelder — eine offiziell geholte Zeile ist von
-einer über die UI geholten nur an ihrer `quelle` zu unterscheiden, nicht an
-ihrem Aufbau.
+Both APIs describe the same devices, but with different field names, types and
+encodings. After translation a record from either source can be consumed
+through a single schema.
 
-## Vier Unterschiede, die übersetzt werden müssen
+## Four differences that have to be translated
 
-**1. Schreibweise.** `MF_SRN` gegen `manufacturerSrn`, `TRADE_NAME` gegen
-`tradeName`. Stumpfe Abbildung, unten in `_FELDER`.
+**1. Spelling.** `MF_SRN` vs `manufacturerSrn`, `TRADE_NAME` vs `tradeName`.
 
-**2. Wahrheitswerte sind Fließkommazahlen.** `IMPLANTABLE = 0.0`, `REUSABLE =
-1.0`, und `null` heißt „keine Angabe". `_flagge()` macht daraus 0/1/None —
-wobei die Unterscheidung zwischen 0 und None hier genauso trägt wie im
-restlichen Projekt: „ausdrücklich nein" ist etwas anderes als „nichts
-eingetragen".
+**2. Booleans are floats.** `IMPLANTABLE = 0.0`, `REUSABLE = 1.0`, and `null`
+means "not stated". `_flagge()` maps them to False/True/None; "explicitly no"
+stays distinguishable from "nothing entered".
 
-**3. Aufzählungswerte sind undurchsichtige negative Kennzahlen.**
-`RISK_CLASS_ID = -203.0` bedeutet Klasse I. Die Zuordnung steht in `/reference`
-— aber dort nur als **Übersetzung** („Class I", „Classe I", „Κατηγορία I"),
-nicht als Bezeichner. Deshalb stehen die Tabellen unten fest im Code: Sie sind
-klein (13 Risikoklassen, 7 Rechtsrahmen, 3 Marktstatus), am 2026-08-17
-vollständig aus `/reference` abgelesen, und `apiwacht.py` sieht nach, ob sie
-noch stimmen. Eine zur Laufzeit aus Übersetzungen geratene Zuordnung wäre in
-einem Zulassungsumfeld die falsche Sorte Bequemlichkeit.
+**3. Enumerations are opaque negative ids.** `RISK_CLASS_ID = -203.0` means
+class I. `/reference` resolves the ids, but only as a **translation** ("Class
+I", "Classe I", "Κατηγορία I"), not as a stable identifier. The tables below
+are therefore hard-coded: they are small (13 risk classes, 7 legislations, 3
+market statuses), read completely from `/reference` on 2026-08-17, and
+`watch/apiwacht.py` checks whether they still hold. Deriving the mapping from
+translations at runtime would be guessing.
 
-**4. Mehrsprachige Felder sind JSON in einem String.** `MF_ACTOR_NAMES` trägt
-`'{"texts": [{"language": …, "text": …}]}'` — als Zeichenkette, nicht als
-Objekt. `_mehrsprachig()` packt es aus, damit `store._text()` es wie gewohnt
-behandeln kann.
+**4. Multilingual fields are JSON inside a string.** `MF_ACTOR_NAMES` carries
+`'{"texts": [{"language": …, "text": …}]}'` as a string, not as an object.
+`_mehrsprachig()` unpacks it.
 
-## Was die offizielle Schnittstelle NICHT liefert
+## What the official API does NOT provide
 
-Auch nach der Übersetzung bleiben Lücken, und sie gehören benannt, weil sie
-sonst als „keine Angabe in EUDAMED" durchgingen:
+Gaps that remain after translation, and that must not be read as "not stated
+in EUDAMED":
 
-    device_markets     die Länderangaben — die füllt nur der UI-Detailabruf
-    single_use         kein Feld im offiziellen Datensatz
-    version_date       kein Feld
-    Zertifikate        gar nicht — die offizielle API führt sie nicht
+    country/market data   only the UI detail call carries it
+    single use            no field in the official record
+    version date          no field
+    certificates          not at all — the official API does not carry them
 
-`als_detail()` schreibt diese Felder deshalb **nicht** — es lässt sie leer,
-statt sie mit einem Ersatzwert zu belegen. Die Upserts arbeiten durchgehend mit
-`COALESCE`, ein späterer UI-Abruf ergänzt sie also, ohne das Vorhandene zu
-überschreiben.
+`als_detail()` therefore leaves these fields unset instead of filling them with
+a substitute value, so a later UI call can supply them.
 """
 
 from __future__ import annotations
@@ -60,23 +51,22 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-#: Die Quellenkennung, die in `devices.quelle` landet.
+#: Source tag for records taken from the official API.
 QUELLE = "offiziell"
 
 # ---------------------------------------------------------------------------
-# Die Aufzählungstabellen — am 2026-08-17 aus /reference abgelesen
+# The enumeration tables — read from /reference on 2026-08-17
 # ---------------------------------------------------------------------------
 #
-# Vollständig: /reference kennt zu diesen drei Feldern 13, 7 bzw. 3 Werte, und
-# alle stehen hier. Was nicht abgebildet ist, wird zu None und damit zu „keine
-# Angabe" — nie zu einem geratenen Nachbarwert.
+# Complete: /reference lists 13, 7 and 3 values for these three fields, and all
+# of them are here. An unmapped value becomes None, i.e. "not stated" — never a
+# guessed neighbour.
 
-#: `RISK_CLASS_ID` -> das Vokabular, das dieses Projekt überall verwendet.
+#: `RISK_CLASS_ID` -> the `refdata.risk-class.*` codes of the UI API.
 #:
-#: Die vier Altwerte (AIMDD, IVD-Anhang-II, IVD allgemein) haben in EUDAMEDs
-#: heutigem `refdata.risk-class.*` keine Entsprechung; sie stammen aus den
-#: Vorgängerrichtlinien. Sie bleiben unabgebildet — ein Gerät aus dieser Zeit
-#: bekommt keine Risikoklasse angedichtet.
+#: The legacy values (AIMDD, IVD Annex II, IVD general) have no counterpart in
+#: today's `refdata.risk-class.*`; they come from the predecessor directives
+#: and stay unmapped rather than being assigned an approximate class.
 RISIKOKLASSEN: dict[float, str] = {
     -203.0: "refdata.risk-class.class-i",
     -204.0: "refdata.risk-class.class-iia",
@@ -86,13 +76,13 @@ RISIKOKLASSEN: dict[float, str] = {
     -200.0: "refdata.risk-class.class-b",
     -201.0: "refdata.risk-class.class-c",
     -202.0: "refdata.risk-class.class-d",
-    # Der einzige Altwert mit belegtem Bezeichner: /reference lässt ihn in der
-    # ungarischen Zeile unübersetzt durch.
+    # The only legacy value with a documented identifier: /reference leaves it
+    # untranslated in the Hungarian row.
     -219.0: "refdata.risk-class.ivd-devices-self-testing",
 }
 
 #: `APPLICABLE_LEGISLATION_ID` -> `refdata.applicable-legislation.*`.
-#: `-3020` („None") und `-3021` („Unknown") sind ausdrücklich keine Angabe.
+#: `-3020` ("None") and `-3021` ("Unknown") explicitly mean "not stated".
 RECHTSRAHMEN: dict[float, str] = {
     -197.0: "refdata.applicable-legislation.mdr",
     -198.0: "refdata.applicable-legislation.ivdr",
@@ -102,39 +92,37 @@ RECHTSRAHMEN: dict[float, str] = {
 }
 
 #: `DEVICE_STATUS_TYPE_ID` -> `refdata.device-model-status.*`.
-#: Als einziges Feld liefert `/reference` hier die rohen Bezeichner mit; die
-#: Tabelle ist damit nicht abgeschrieben, sondern abgelesen.
+#: This is the only field for which `/reference` also carries the raw
+#: identifiers, so the table is read rather than inferred.
 MARKTSTATUS: dict[float, str] = {
     -11.0: "refdata.device-model-status.on-the-market",
     -12.0: "refdata.device-model-status.no-longer-on-the-market",
     -790.0: "refdata.device-model-status.not-intended-for-eu-market",
 }
 
-#: `SPECIAL_DEVICE_TYPE_ID` -> `refdata.special-device-type.*`. Nur die beiden
-#: Softwarewerte sind für dieses Werkzeug erheblich; Brillen und Kontaktlinsen
-#: bleiben unabgebildet.
+#: `SPECIAL_DEVICE_TYPE_ID` -> `refdata.special-device-type.*`. Only the two
+#: software values are mapped; spectacles and contact lenses stay unmapped.
 SONDERTYPEN: dict[float, str] = {
     -47.0: "refdata.special-device-type.software",
     -43.0: "refdata.special-device-type.software",
 }
 
 
-#: Die Umkehrung, für die FILTERrichtung: `class-iii` -> -10.0.
+#: The inverse, for the FILTER direction: `class-iii` -> -10.0.
 #:
-#: Gebraucht seit dem 2026-08-17: Die offizielle Schnittstelle filtert sehr wohl
-#: nach `RISK_CLASS_ID` und `APPLICABLE_LEGISLATION_ID` — nur mit ihren eigenen
-#: Kennzahlen, nicht mit dem refdata-Vokabular. `OFFIZIELLE_API.md` §3 hatte
-#: beide als „mit HTTP 400 abgelehnt" geführt; die Ablehnung galt dem WERT
-#: (`class-iii`), nicht dem Parameter. Gemessen an Brainlab:
+#: `RISK_CLASS_ID` and `APPLICABLE_LEGISLATION_ID` do filter server-side, but
+#: only with the API's own ids; the HTTP 400 applies to the VALUE
+#: (`class-iii`), not to the parameter. Measured 2026-08-17 on one
+#: manufacturer:
 #:
-#:     MF_SRN allein                    406
-#:     + RISK_CLASS_ID=-10.0              4   (Klasse III)
-#:     + RISK_CLASS_ID=-203.0           235   (Klasse I)
+#:     MF_SRN alone                     406
+#:     + RISK_CLASS_ID=-10.0              4   (class III)
+#:     + RISK_CLASS_ID=-203.0           235   (class I)
 #:     + APPLICABLE_LEGISLATION_ID=-197 330   (MDR)
-#:     + APPLICABLE_LEGISLATION_ID=-53   76   (MDD)  -> 330+76 = 406, exakt
+#:     + APPLICABLE_LEGISLATION_ID=-53   76   (MDD)  -> 330+76 = 406, exact
 def _umkehr(tabelle: dict[float, str]) -> dict[str, float]:
-    """Kurzform -> Kennzahl. `refdata.risk-class.class-iii` und `class-iii`
-    führen beide zum Ziel, weil `ParsedQuery` die kurze Form trägt."""
+    """Code -> numeric id. Both `refdata.risk-class.class-iii` and the short
+    form `class-iii` resolve."""
     aus: dict[str, float] = {}
     for kennzahl, code in tabelle.items():
         aus[code] = kennzahl
@@ -147,12 +135,12 @@ RECHTSRAHMEN_ID = _umkehr(RECHTSRAHMEN)
 
 
 # ---------------------------------------------------------------------------
-# Werkzeuge
+# Helpers
 # ---------------------------------------------------------------------------
 
 
 def _zahl(wert: Any) -> float | None:
-    """Der Datensatz liefert alles Numerische als Fließkommazahl."""
+    """The official record delivers every numeric value as a float."""
     try:
         return float(wert) if wert is not None else None
     except (TypeError, ValueError):
@@ -160,7 +148,7 @@ def _zahl(wert: Any) -> float | None:
 
 
 def _ganz(wert: Any) -> int | None:
-    """`VERSION_NUMBER = 1.0` ist eine Eins, keine Kommazahl."""
+    """`VERSION_NUMBER = 1.0` is the integer 1, not a decimal."""
     zahl = _zahl(wert)
     return int(zahl) if zahl is not None else None
 
@@ -168,16 +156,14 @@ def _ganz(wert: Any) -> int | None:
 def _flagge(wert: Any) -> bool | None:
     """0.0/1.0/null -> False/True/None.
 
-    None bleibt None: „nichts eingetragen" ist etwas anderes als „nein", und
-    dieser Unterschied trägt im ganzen Projekt (siehe `db/schema.sql`, Absatz
-    zu den `*_fetched_at`-Spalten).
+    None stays None: "nothing entered" is not the same as "no".
     """
     zahl = _zahl(wert)
     return None if zahl is None else bool(zahl)
 
 
 def _text(wert: Any) -> str | None:
-    """Leerstring und Leerzeichen zählen als nicht gesetzt."""
+    """Empty and whitespace-only strings count as not set."""
     if wert is None:
         return None
     gestutzt = str(wert).strip()
@@ -185,11 +171,11 @@ def _text(wert: Any) -> str | None:
 
 
 def _mehrsprachig(wert: Any) -> Any:
-    """`'{"texts": [...]}'` als String -> das Objekt, das `store._text` erwartet.
+    """`'{"texts": [...]}'` as a string -> the parsed object.
 
-    Kommt so aus `MF_ACTOR_NAMES` und `ACTOR_ABBREVIATED_NAMES`: JSON, aber in
-    eine Zeichenkette eingepackt. Wer das durchreicht, speichert die geschweifte
-    Klammer als Herstellernamen.
+    `MF_ACTOR_NAMES` and `ACTOR_ABBREVIATED_NAMES` arrive this way: JSON
+    wrapped in a string. Passing it through unparsed stores the opening brace
+    as the manufacturer name.
     """
     if not isinstance(wert, str):
         return wert
@@ -203,25 +189,23 @@ def _mehrsprachig(wert: Any) -> Any:
         return None
 
 
-#: Schon gemeldete unabgebildete Kennzahlen — gegen Protokoll-Lärm.
+#: Unmapped ids already reported once — keeps the log readable.
 _GEMELDET: set[float] = set()
 
 
 def _refdata(tabelle: dict[float, str], wert: Any) -> dict[str, str] | None:
-    """Kennzahl -> `{"code": "refdata…"}`, die Form, die `store._code()` liest.
+    """Numeric id -> `{"code": "refdata…"}`, the form the UI API uses.
 
-    Ein unbekannter Wert wird zu None und **nicht** zum nächstbesten Eintrag.
-    Eine falsche Risikoklasse wäre in einer Zulassungsrecherche schlimmer als
-    eine fehlende.
+    An unknown value becomes None, **not** the nearest entry: a wrong risk
+    class is worse than a missing one.
     """
     zahl = _zahl(wert)
     if zahl is None:
         return None
     code = tabelle.get(zahl)
     if code is None:
-        # Einmal je Kennzahl, nicht einmal je Datensatz: Bei 406 Geräten mit
-        # demselben unabgebildeten Sondertyp stünden sonst 406 gleiche Zeilen
-        # im Protokoll und verdeckten alles andere.
+        # Once per id, not once per record: 406 devices sharing the same
+        # unmapped special type would otherwise log 406 identical lines.
         if zahl not in _GEMELDET:
             _GEMELDET.add(zahl)
             log.info("Referenzkennzahl %s ist nicht abgebildet — bleibt leer "
@@ -232,21 +216,16 @@ def _refdata(tabelle: dict[float, str], wert: Any) -> dict[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
-# Die Umformungen
+# The transformations
 # ---------------------------------------------------------------------------
 
 
 def als_suchtreffer(satz: dict[str, Any]) -> dict[str, Any]:
-    """Offizieller Datensatz -> die D1-Form von `/devices/udiDiData`.
+    """Official record -> the shape of a `/devices/udiDiData` search hit.
 
-    Deckt jedes Feld ab, das `store.upsert_devices_from_search` liest. Zwei
-    Abweichungen gegenüber einem echten D1-Treffer, beide unschädlich:
-
-      * `ulid` heißt dort `UDI_DI_DATA_ULID`,
-      * `basicUdiDiDataUlid` heißt `BASIC_UDI_DATA_ULID`.
-
-    Was der offizielle Datensatz nicht kennt (`versionState`), bleibt leer und
-    wird vom `COALESCE` der Upserts nicht überschrieben.
+    Two field names differ on the official side: `ulid` is `UDI_DI_DATA_ULID`,
+    `basicUdiDiDataUlid` is `BASIC_UDI_DATA_ULID`. `versionState` has no
+    official counterpart and stays None.
     """
     return {
         "uuid": _text(satz.get("UUID")),
@@ -263,27 +242,24 @@ def als_suchtreffer(satz: dict[str, Any]) -> dict[str, Any]:
         "authorisedRepresentativeSrn": _text(satz.get("AR_SRN")),
         "riskClass": _refdata(RISIKOKLASSEN, satz.get("RISK_CLASS_ID")),
         "deviceStatusType": _refdata(MARKTSTATUS, satz.get("DEVICE_STATUS_TYPE_ID")),
-        # `versionState` gibt es offiziell nicht — `STATUS_ID` ist der
-        # Aktiv-Zustand des Datensatzes und etwas anderes.
+        # No official `versionState` — `STATUS_ID` is the active state of the
+        # record and means something else.
         "versionState": None,
         "latestVersion": _flagge(satz.get("LATEST_VERSION")),
         "versionNumber": _ganz(satz.get("VERSION_NUMBER")),
     }
 
 
-#: `ACTOR_TYPE` (Klartext) -> der refdata-Code, den `db/store.py` erwartet.
+#: `ACTOR_TYPE` (clear text) -> the refdata code used by the UI API.
 #:
-#: Die offizielle Schnittstelle liefert die Rolle ausgeschrieben („Manufacturer"),
-#: die UI-Schnittstelle als Code. Gespeichert wird der Code, weil der Gerätefilter
-#: `srn=` gegen ihn prüft (`db/store.AKTEUR_HERSTELLER`).
+#: The official API spells the role out ("Manufacturer"), the UI API uses a
+#: code.
 #:
-#: Der Abzug führt drei weitere Rollen, die hier bewusst FEHLEN: „Notified
-#: Body", „Competent Authority" und „European Commission" (gemessen am
-#: 2026-08-19, zusammen drei von zweitausend Sätzen). Ihre refdata-Codes stehen
-#: in keiner Quelle, die dieses Projekt gemessen hat — sie zu erfinden hieße,
-#: eine Zuordnung zu behaupten. Sie landen ohne Code in der Tabelle, ihr
-#: `role_name` steht im Klartext daneben, und die Herstellersuche betrachtet
-#: sie ohnehin nicht. Wer sie eines Tages braucht, misst die Codes nach.
+#: The dump carries three further roles that are deliberately MISSING here:
+#: "Notified Body", "Competent Authority" and "European Commission" (measured
+#: 2026-08-19, together three records in two thousand). Their refdata codes do
+#: not appear in any measured source, so no mapping is asserted; such records
+#: keep their clear-text role and get no code.
 AKTEURSROLLEN: dict[str, str] = {
     "manufacturer": "refdata.actor-type.manufacturer",
     "authorised representative": "refdata.actor-type.authorised-representative",
@@ -294,42 +270,33 @@ AKTEURSROLLEN: dict[str, str] = {
         "refdata.actor-type.system-procedure-pack-producer",
 }
 
-#: Felder des offiziellen Akteursabzugs, die NICHT gespeichert werden.
+#: Fields of the official actor dump that are NOT carried over.
 #:
-#: `PRRC_FIRST_NAME` und `PRRC_FAMILY_NAME` benennen die für die Einhaltung der
-#: Regulierungsvorschriften verantwortliche Person — einen Menschen mit Vor- und
-#: Nachnamen. Alles andere im Abzug beschreibt ein Unternehmen; dies nicht.
-#:
-#: Das Werkzeug beantwortet keine Frage, für die dieser Name gebraucht würde,
-#: und die Datenschutzerklärung sagt Datenminimierung zu. Also wird er beim
-#: Einlesen verworfen und nicht etwa gespeichert und später ausgeblendet: Was
-#: nicht in der Datenbank steht, kann auch nicht aus einer Sicherung fallen.
+#: `PRRC_FIRST_NAME` and `PRRC_FAMILY_NAME` name the person responsible for
+#: regulatory compliance — personal data. Everything else in the dump
+#: describes a company. The names are dropped on read rather than stored and
+#: hidden later.
 NICHT_UEBERNOMMEN = frozenset({"PRRC_FIRST_NAME", "PRRC_FAMILY_NAME"})
 
 
 def als_akteur(satz: dict[str, Any]) -> dict[str, Any]:
-    """Offizieller Akteursdatensatz -> die A1-Form der UI-Schnittstelle.
+    """Official actor record -> the shape of a UI-API actor search hit.
 
-    Gegenrichtung zu `als_suchtreffer`, für den Akteursbestand. Der offizielle
-    Abzug ist der **reichere** von beiden: Er trägt `STATUS` (aktiv/inaktiv),
-    `STATUS_FROM_DATE` und `VERSION` mit, und dazu Webseite und
-    Umsatzsteuernummer, die über die UI-Schnittstelle nur der Detailabruf je
-    Akteur liefert — eine Anfrage pro Firma statt tausend Firmen pro Anfrage.
+    The official dump is the richer of the two: it carries `STATUS`
+    (active/inactive), `STATUS_FROM_DATE` and `VERSION`, plus website and VAT
+    number, which the UI API exposes only in the per-actor detail call.
 
-    Warum der Status zählt: Ohne ihn sind sieben Elekta-Registrierungen sieben
-    gleichwertige Firmen. Gemessen am 2026-08-19 ist genau **eine** davon aktiv
-    (SE-MF-000002125); die übrigen sechs sind abgemeldet. Sie ohne diesen
-    Unterschied als Schwestergesellschaften anzubieten hieße, zu sechs
-    stillgelegten Registrierungen einzuladen.
+    The status matters: one measured manufacturer has seven registrations, of
+    which exactly **one** is active (SE-MF-000002125, measured 2026-08-19).
+    Without the status the six deregistered ones look like equal siblings.
 
-    `PRRC_*` wird verworfen, siehe `NICHT_UEBERNOMMEN`.
+    `PRRC_*` is dropped, see `NICHT_UEBERNOMMEN`.
     """
     rolle = _text(satz.get("ACTOR_TYPE")) or ""
     return {
         "eudamedIdentifier": _text(satz.get("ACTOR_ID")),
-        # Die offizielle Schnittstelle führt keine UUID mit. Sie bleibt leer und
-        # wird vom COALESCE des Upserts nicht überschrieben — eine über die
-        # UI-Schnittstelle bereits bekannte UUID überlebt den Abzug.
+        # The official API carries no UUID. It stays None so that a UUID
+        # already known from the UI API is not overwritten.
         "uuid": None,
         "name": _text(satz.get("NAME")),
         "abbreviatedName": _text(satz.get("ABBREVIATED_NAME")),
@@ -340,8 +307,8 @@ def als_akteur(satz: dict[str, Any]) -> dict[str, Any]:
         "actorType": {"code": AKTEURSROLLEN[rolle.strip().lower()]}
                      if rolle.strip().lower() in AKTEURSROLLEN else None,
         "roleName": rolle or None,
-        # Ein Registrierungsdatum liefert der Abzug nicht; `STATUS_FROM_DATE`
-        # ist der Beginn des JETZIGEN Status und etwas anderes.
+        # The dump has no registration date; `STATUS_FROM_DATE` is the start of
+        # the CURRENT status and means something else.
         "dateOfRegistration": None,
         "actorStatus": {"code": _statuscode(satz.get("STATUS"))}
                        if _text(satz.get("STATUS")) else None,
@@ -358,17 +325,17 @@ def als_akteur(satz: dict[str, Any]) -> dict[str, Any]:
 
 
 def _statuscode(wert: Any) -> str:
-    """„Active" -> `refdata.actor-status.active`. Unbekanntes bleibt roh."""
+    """Maps "Active" to `refdata.actor-status.active`; unknown stays raw."""
     kurz = (_text(wert) or "").strip().lower()
     return (f"refdata.actor-status.{kurz}"
             if kurz in ("active", "inactive") else kurz)
 
 
 def _anschrift(satz: dict[str, Any]) -> str | None:
-    """Die Anschrift aus ihren Bestandteilen — die UI-Form ist eine Zeile.
+    """Join the address parts into the single line the UI API returns.
 
-    Reihenfolge wie in der UI-Schnittstelle: Straße, Hausnummer, Postleitzahl,
-    Ort. Fehlende Teile fallen weg, statt Kommas ohne Inhalt zu hinterlassen.
+    Order as in the UI API: street, building number, postal code, city.
+    Missing parts are omitted rather than left as empty separators.
     """
     teile = [
         _text(satz.get("ACT_ADDR_STREET_NAME")),
@@ -381,19 +348,17 @@ def _anschrift(satz: dict[str, Any]) -> str | None:
 
 
 def als_detail(satz: dict[str, Any]) -> dict[str, Any]:
-    """Offizieller Datensatz -> die D2-Form von `/devices/udiDiData/{uuid}`.
+    """Official record -> the shape of `/devices/udiDiData/{uuid}`.
 
-    Das ist der eigentliche Gewinn: Diese Felder kostet die UI-API **eine
-    Anfrage je Gerät**, hier kommen sie im Suchergebnis mit.
+    These fields cost **one request per device** on the UI API; the official
+    search returns them inline.
 
-    `cndNomenclatures` trägt genau einen Eintrag, weil der offizielle Datensatz
-    genau einen `NOMENCLATURE_CODE` führt. Die Nomenklaturzuordnung ist aber
-    mehrwertig: 19 von 1.183 Geräten im Bestand (1,6 %, gemessen 2026-08-17)
-    haben zwei bis vier Codes. Der Upsert schreibt mit `ON CONFLICT DO NOTHING`
-    in `device_emdn`, ergänzt also und verdrängt nichts — ein späterer
-    UI-Detailabruf vervollständigt die Liste.
+    `cndNomenclatures` holds at most one entry because the official record
+    carries exactly one `NOMENCLATURE_CODE`. The real assignment is
+    multi-valued: 19 of 1,183 devices in one sample (1.6 %, measured
+    2026-08-17) have two to four codes, so this list may be incomplete.
 
-    `marketInfoLink` fehlt bewusst: Länderangaben gibt es offiziell nicht.
+    `marketInfoLink` is absent: the official API has no country data.
     """
     code = _text(satz.get("NOMENCLATURE_CODE"))
     return {
@@ -405,25 +370,19 @@ def als_detail(satz: dict[str, Any]) -> dict[str, Any]:
         "latestVersion": _flagge(satz.get("LATEST_VERSION")),
         "versionNumber": _ganz(satz.get("VERSION_NUMBER")),
         "sterile": _flagge(satz.get("STERILE")),
-        # `SINGLE_USE` gibt es im offiziellen Datensatz nicht — weglassen statt
-        # raten. Der COALESCE-Upsert lässt einen späteren UI-Wert zu.
+        # No `SINGLE_USE` in the official record — omitted rather than
+        # guessed, so a later UI value can supply it.
         "cndNomenclatures": [{"code": code}] if code else [],
     }
 
 
 def als_basic_udi(satz: dict[str, Any]) -> dict[str, Any]:
-    """Offizieller Datensatz -> die D3-Form von `/devices/basicUdiData/…`.
+    """Official record -> the shape of `/devices/basicUdiData/…`.
 
-    **Ohne Zertifikate** — die hat die offizielle Schnittstelle nicht. Was hier
-    herüberkommt, sind die Produktmerkmale und der Rechtsrahmen, und genau die
-    fehlen heute in `analysis_ready_devices` für die meisten Geräte.
-
-    Wichtig für den Aufrufer: `store.upsert_basic_udi` stempelt
-    `certificates_fetched_at` **immer**, auch bei leerer Zertifikatsliste — und
-    das hieße hier fälschlich „abgefragt, nichts gefunden". Für die offizielle
-    Quelle gehört deshalb `ingest` so gebaut, dass es die Felder direkt setzt
-    statt über diesen Upsert zu gehen. Die Form steht hier trotzdem, weil sie
-    die Feldzuordnung an einer Stelle festhält.
+    Carries the device properties and the legislation, but
+    `deviceCertificateInfoList` is always empty: the official API has no
+    certificates at all. Callers must not read that empty list as "queried,
+    none found" — only the UI API can answer that question.
     """
     return {
         "deviceName": _text(satz.get("DEVICE_NAME")),

@@ -1,16 +1,13 @@
-"""Probe 03 — Kann `cndCode` Präfix-Suche?
+"""Probe 03 — does `cndCode` search by prefix?
 
-Frage: Liefert `cndCode=Q01` alle Unterknoten, oder
-matcht der Parameter exakt?
+Question: does `cndCode=Q01` also return the child nodes, or does the
+parameter match exactly? Without prefix matching, a query over a whole EMDN
+branch requires expanding the tree locally and one request per leaf code.
 
-Warum das zählt: Die typische Anfrage im Klinikalltag lautet "alle Dentalprodukte",
-nicht "alle Produkte mit Code Q010601". Kann die API kein Präfix, müssen wir den
-EMDN-Baum lokal expandieren und n Einzelabfragen fahren — bei EUDAMED-Tempo ein
-erheblicher Unterschied.
-
-Methode: Trefferzahlen für Codes zunehmender Länge vergleichen. Bei Präfix-Suche
-muss gelten: count(Q) >= count(Q01) >= count(Q0106) >= count(Q010601), alle > 0.
-Bei exaktem Match sind die kurzen Codes 0 (oder es gibt sie als eigenen Knoten).
+Method: compare hit counts for codes of increasing length. Prefix matching
+implies count(Q) >= count(Q01) >= count(Q0106) >= count(Q010601), all > 0.
+With exact matching the short codes return 0 unless they exist as nodes of
+their own.
 """
 
 from __future__ import annotations
@@ -22,10 +19,10 @@ PROBE_ID = "03"
 TITLE = "cndCode: Präfix-Suche oder exakter Match?"
 QUESTION = "Liefert cndCode=Q01 auch die Unterknoten? Sind mehrere cndCode gleichzeitig möglich?"
 
-#: Von der Wurzel bis zum Blatt. Q010601 = DENTAL ALLOYS (Referenzfall aus Delapro/EUDAMED).
+#: Root to leaf. Q010601 = DENTAL ALLOYS, used as the reference code.
 LADDER = ["Q", "Q01", "Q0106", "Q010601"]
 
-#: Zwei Blätter für den Mehrfach-Parameter-Test.
+#: Two leaf codes for the repeated-parameter test.
 MULTI = ["Q010601", "Q010699"]
 
 
@@ -55,7 +52,7 @@ def run(client: EudamedClient) -> ProbeResult:
     )
     exact_only = leaf is not None and leaf > 0 and top == 0
 
-    # --- Mehrere cndCode gleichzeitig ------------------------------------------
+    # --- Several cndCode values at once -----------------------------------------
     single_counts = []
     for code in MULTI:
         response, error = call(client.search_devices, cnd_code=code, page=0, page_size=1)
@@ -67,7 +64,7 @@ def run(client: EudamedClient) -> ProbeResult:
         "/devices/udiDiData",
         {
             "page": 0, "pageSize": 1, "size": 1,
-            "cndCode": MULTI,  # requests serialisiert das als cndCode=A&cndCode=B
+            "cndCode": MULTI,  # requests serialises this as cndCode=A&cndCode=B
             "languageIso2Code": "en",
         },
     )

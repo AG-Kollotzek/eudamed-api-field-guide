@@ -1,15 +1,13 @@
-"""Prüfstand für die API-Wacht — ohne Netz, ohne EUDAMED, ohne Kosten.
+"""Tests for the API watch — offline, no EUDAMED calls.
 
     python scripts/test_apiwacht.py
 
-Geprüft wird der Teil, auf den es ankommt: **der Vergleich**. Die Aufnahme
-selbst ist eine Reihe von HTTP-Aufrufen und braucht keinen Prüfstand; ob aus
-zwei Aufnahmen die richtigen Schlüsse gezogen werden, dagegen sehr wohl. Ein
-Wächter, der schweigt, wenn ein Filter ausfällt, ist schlimmer als keiner —
-und dass er schweigt, merkt man erst, wenn es zu spät ist.
+Covers `apiwacht.vergleiche()` and `apiwacht.vollstaendig()`, i.e. the
+conclusions drawn from two snapshots. Taking a snapshot is a sequence of HTTP
+calls and is not tested here.
 
-Die Fälle sind gebaute Wörterbücher, keine Aufzeichnungen: So lässt sich auch
-prüfen, was hoffentlich nie vorkommt.
+The cases are hand-built dicts rather than recordings, so states that have not
+occurred yet can be tested too.
 """
 
 from __future__ import annotations
@@ -39,7 +37,7 @@ def gruppe(titel: str) -> None:
 
 
 def aufnahme(**abweichung):
-    """Eine vollständige, gesunde Aufnahme — Grundlage aller Fälle."""
+    """A complete, healthy snapshot — the baseline for all cases."""
     basis = {
         "format": apiwacht.FORMAT,
         "zeitpunkt": "2026-08-14T10:00:00+00:00",
@@ -72,7 +70,7 @@ def aufnahme(**abweichung):
 
 
 def offiziell(**abweichung):
-    """Der Aufnahmeblock zur offiziellen Schnittstelle, im Normalzustand."""
+    """The official-API part of a snapshot, in its normal state."""
     block = {
         "angenommen": {n: {"status": 200, "saetze": 5}
                        for n in apiwacht.OFFIZIELL_ANGENOMMEN},
@@ -112,17 +110,15 @@ def main() -> int:
        "und sagt, was das im Werkzeug bedeutet")
 
     gruppe("Verschwundene Codewerte — je nach Verhalten der API")
-    # Gemessen am 2026-08-14: EUDAMED antwortet auf einen unbekannten Codewert
-    # mit HTTP 400. Ein verschwundener Wert liefert dann KEINE Zahl. Die erste
-    # Fassung dieser Datei hätte genau das übersprungen ("kein Messwert").
+    # Measured 2026-08-14: EUDAMED answers an unknown code value with HTTP 400,
+    # so a value that disappears yields no count at all rather than a zero.
     neu = aufnahme(vokabular={"refdata.risk-class.class-iib": None,
                               "refdata.applicable-legislation.mdr": 2_000_000})
     ok("kritisch" in schweren(apiwacht.vergleiche(alt, neu)),
        "unbekannter Wert wird abgelehnt (HTTP 400) -> erkannt")
 
-    # Dieselbe Lage, aber EUDAMED antwortet künftig mit 0 statt mit einem
-    # Fehler. Der Kanarienvogel misst das bei jedem Lauf mit, die Prüfung
-    # stellt sich um.
+    # Same situation, but EUDAMED returns 0 instead of an error. The canary
+    # measures that behaviour on every run, so the check adapts.
     alt_null = aufnahme(kanarienvogel="null")
     neu_null = aufnahme(kanarienvogel="null",
                         vokabular={"refdata.risk-class.class-iib": 0,
@@ -130,8 +126,8 @@ def main() -> int:
     ok("kritisch" in schweren(apiwacht.vergleiche(alt_null, neu_null)),
        "unbekannter Wert liefert 0 -> ebenfalls erkannt (Kanarienvogel)")
 
-    # Und der dritte denkbare Fall: unbekannte Werte werden ignoriert, der
-    # verschwundene Wert liefert also ALLES statt nichts.
+    # Third possible behaviour: unknown values are ignored, so a disappeared
+    # value returns everything instead of nothing.
     alt_alles = aufnahme(kanarienvogel="alles")
     neu_alles = aufnahme(kanarienvogel="alles",
                          vokabular={"refdata.risk-class.class-iib": 3_000_000,
@@ -169,9 +165,8 @@ def main() -> int:
     ok(schweren(a) == ["kritisch"], "Seitenzählung nicht mehr 0-basiert -> kritisch")
 
     gruppe("Schalter der öffentlichen Seite")
-    # Der Fall, für den die Prüfung gebaut ist: EUDAMED gibt die
-    # Sicherheitsmeldungen frei. Das ist keine Störung, sondern eine neue
-    # Möglichkeit — und damit „auffällig", nicht „kritisch".
+    # EUDAMED enables the vigilance feature flag: a new capability, not a
+    # fault, hence `auffaellig` rather than `kritisch`.
     a = apiwacht.vergleiche(alt, aufnahme(schalter={
         "ffDevice": True, "ffVigFsn": True, "ffSscpi": True}))
     ok(schweren(a) == ["auffaellig"], "freigeschalteter Schalter -> auffällig")
@@ -231,7 +226,7 @@ def main() -> int:
     gruppe("Die offizielle Schnittstelle")
     basis = aufnahme(offiziell=offiziell())
 
-    # 1. Ein tragender Parameter fällt aus.
+    # 1. A load-bearing parameter stops working.
     kaputt = aufnahme(offiziell=offiziell(
         angenommen={**{n: {"status": 200, "saetze": 5}
                        for n in apiwacht.OFFIZIELL_ANGENOMMEN},
@@ -241,10 +236,8 @@ def main() -> int:
     ok(any("capabilities" in x.folge for x in a),
        "und sagt, wo es angepasst gehört")
 
-    # 2. Ein abgelehnter Parameter geht plötzlich — eine neue Fähigkeit.
-    #    `IMPLANTABLE` steht dafür, seit `RISK_CLASS_ID` am 2026-08-17 von
-    #    genau dieser Prüfung als angenommen entlarvt wurde und in die andere
-    #    Liste gewandert ist.
+    # 2. A previously rejected parameter starts working — a new capability.
+    #    `IMPLANTABLE` stands in for that case here.
     besser = aufnahme(offiziell=offiziell(
         abgelehnt={**{n: {"status": 400} for n in apiwacht.OFFIZIELL_ABGELEHNT},
                    "IMPLANTABLE": {"status": 200}}))
@@ -254,7 +247,7 @@ def main() -> int:
     ok(any("Fall C" in x.folge for x in a),
        "und nennt die Folge: das lokale Nachfiltern entfiele")
 
-    # 3. Der Leerzeichen-Fehler ist behoben — die Kapselung muss weg.
+    # 3. The leading-space bug is fixed — the workaround has to go.
     geheilt = aufnahme(offiziell=offiziell(
         leerzeichen={"ohne": 1081, "mit": 1081}))
     a = apiwacht.vergleiche(basis, geheilt)
@@ -262,7 +255,7 @@ def main() -> int:
     ok(any("entfernt werden" in x.folge for x in a),
        "denn die Kapselung sucht sonst ins Leere")
 
-    # 4. Ein Referenzschlüssel verschwindet.
+    # 4. A reference key disappears.
     ohne_ref = aufnahme(offiziell=offiziell(
         referenz={f"{f}:{k}": (f != "RISK_CLASS_ID")
                   for f, k in apiwacht.REFERENZ_SCHLUESSEL}))
@@ -270,7 +263,7 @@ def main() -> int:
     ok(any("normalisierung" in x.folge for x in a),
        "fehlender Referenzschlüssel zeigt auf die Zuordnungstabelle")
 
-    # 5. Der Normalfall bleibt still.
+    # 5. The unchanged case stays silent.
     a = apiwacht.vergleiche(basis, aufnahme(offiziell=offiziell()))
     ok(a == [], f"unveränderte offizielle Schnittstelle -> keine Meldung "
                 f"({len(a)} Änderungen)")
