@@ -48,7 +48,7 @@ individual device. Details in
 ## Reproduce the findings
 
 ```bash
-git clone https://github.com/tim-buck/eudamed-api-field-guide
+git clone https://github.com/AG-Kollotzek/eudamed-api-field-guide
 cd eudamed-api-field-guide
 pip install requests
 
@@ -101,12 +101,26 @@ What this repo adds: systematic parameter probing with control probes (the
 endpoint map, the feature-flag table, and a drift watch. Findings that
 correct the reference repos are marked as such in the probes' output.
 
+## Who maintains this
+
+The **IGRT Lab** at the [Medical University of
+Innsbruck](https://www.i-med.ac.at/). The measurements grew out of a research
+project on making EUDAMED data usable for clinical medical-device questions;
+this repository is the part of that work that belongs to everyone.
+
+Questions, corrections and additions are welcome through the issue tracker —
+that is the fastest way to reach a human here, and it keeps the answer where
+the next person will find it.
+
 ## Contributing
 
 Re-run a probe and get a different result? That is not a contradiction —
 EUDAMED changed. Open an issue with the probe output, or a PR against
 [docs/changelog.md](docs/changelog.md). New probes welcome: one script, one
 question, one verdict.
+
+If a finding here is wrong, saying so is a contribution too. Everything in
+this repository is a measurement taken at a point in time, and EUDAMED moves.
 
 ## License
 
