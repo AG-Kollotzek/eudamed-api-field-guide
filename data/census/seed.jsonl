@@ -1,3 +1,2 @@
-{"schema": 1, "datum": "2026-07-30", "quelle": "documented", "live": {"zertifikate": 4050}, "beleg": "PROBE_RESULTS.md probe 06: total certificate count 4,050"}
-{"schema": 1, "datum": "2026-08-05", "quelle": "documented", "live": {"zertifikate": 4055}, "lokal": {"mdr": 3748, "ivdr": 307}, "beleg": "local weekly sync of the certificate-search module (archived as zertifikate_2026-08-05_lokal.jsonl.gz)"}
-{"schema": 1, "datum": "2026-08-19", "quelle": "documented", "live": {"zertifikate": 4472}, "beleg": "docs/module-matrix.md measurement of api/certificates/search/"}
+{"schema": 1, "datum": "2026-08-19", "quelle": "documented", "live": {"zertifikate": 4472}, "beleg": "docs/module-matrix.md, 'Measured on 2026-08-19': api/certificates/search/ with no filter -> 4,472"}
+{"schema": 1, "datum": "2026-08-23", "quelle": "documented", "live": {"zertifikate": 4538}, "beleg": "PROBE_RESULTS.md probe 06 (run dated 2026-08-23 22:50 UTC): total certificate count 4,538"}

@@ -122,4 +122,9 @@ question, one verdict.
 
 ## License
 
-MIT.
+MIT — for the code and the documentation.
+
+**Not** for `data/census/`: those files are derived from EUDAMED and carry
+the Commission's terms (CC BY 4.0 under Decision 2011/833/EU), including the
+attribution that comes with them. See
+[data/census/README.md](data/census/README.md).

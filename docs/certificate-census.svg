@@ -33,10 +33,9 @@
 <text x="699.1" y="338" text-anchor="middle" fill="#555">Apr 27</text>
 <text x="758.6" y="338" text-anchor="middle" fill="#555">May 27</text>
 <text x="820.2" y="338" text-anchor="middle" fill="#555">Jun 27</text>
-<polyline points="212.8,146.0 224.7,145.7 252.5,127.8 274.4,120.0" fill="none" stroke="#1d4ed8" stroke-width="2"/>
-<circle cx="212.8" cy="146.0" r="4" fill="white" stroke="#1d4ed8" stroke-width="2"/>
-<circle cx="224.7" cy="145.7" r="4" fill="white" stroke="#1d4ed8" stroke-width="2"/>
+<polyline points="252.5,127.8 260.5,125.0 274.4,120.0" fill="none" stroke="#1d4ed8" stroke-width="2"/>
 <circle cx="252.5" cy="127.8" r="4" fill="white" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="260.5" cy="125.0" r="4" fill="white" stroke="#1d4ed8" stroke-width="2"/>
 <circle cx="274.4" cy="120.0" r="4" fill="#1d4ed8"/>
 <text x="60" y="30" font-size="16" fill="#111">EUDAMED certificate-search module: total records</text>
 <text x="60" y="48" fill="#555">open circles = documented anchors · filled = daily census</text>
