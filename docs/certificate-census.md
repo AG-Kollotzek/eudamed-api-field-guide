@@ -72,8 +72,11 @@ python scripts/zaehlstand.py
 python scripts/fill_level.py
 ```
 
-Raw series: [`data/census/`](../data/census/) — seed anchors with their
-provenance, the daily JSONL, and dated dumps of the certificate table.
+Raw series:
+[`data/census/`](https://github.com/AG-Kollotzek/eudamed-api-field-guide/tree/main/data/census)
+— seed anchors with their provenance, the daily JSONL, and dated dumps of the
+certificate table. (Full URL on purpose: only `docs/` is published as a
+website, so a relative link out of it would not resolve.)
 
 ## Source and licence of the underlying data
 

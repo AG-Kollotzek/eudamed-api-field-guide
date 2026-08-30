@@ -69,6 +69,10 @@ def _aus_jsonl(satz: dict, quelle: str) -> dict | None:
             "mdr": lokal.get("mdr") if frisch else None,
             "ivdr": lokal.get("ivdr") if frisch else None,
             "abgelehnte": (satz.get("wochenmodule") or {}).get("abgelehnte"),
+            # None on documented anchors and on lines from before the control
+            # counts existed — only False means a measured disagreement.
+            "stimmig": (satz.get("kontrolle") or {}).get("stimmig"),
+            "nb_summe": (satz.get("nb_verteilung") or {}).get("summe"),
             "quelle": satz.get("quelle") or quelle}
 
 
@@ -84,7 +88,8 @@ def _aus_aufnahme(pfad: Path) -> dict | None:
         return None
     return {"datum": zeit[:10], "zertifikate": zert,
             "geraete": satz.get("gesamt"), "mdr": None, "ivdr": None,
-            "abgelehnte": None, "quelle": "watch"}
+            "abgelehnte": None, "stimmig": None, "nb_summe": None,
+            "quelle": "watch"}
 
 
 def sammle(server_jsonl: Path | None, aufnahmen_dirs: list[Path]) -> list[dict]:
@@ -194,6 +199,31 @@ def _warnblock(punkte: list[dict], heute: date) -> str:
     if not taeglich:
         return ("> ⚠️ **No census measurement yet.** Every point below is a "
                 "documented anchor; the daily series has not started.\n\n")
+    # A disagreeing control count matters more than a stale one: it means the
+    # number on the chart may no longer mean what earlier points meant.
+    uneins = [p for p in taeglich if p.get("stimmig") is False]
+    schief = [p for p in taeglich
+              if p.get("nb_summe") is not None
+              and p["nb_summe"] != p["zertifikate"]]
+    warnung = ""
+    if uneins:
+        warnung += (
+            f"> ⚠️ **The control counts disagree** on "
+            f"{len(uneins)} measurement(s), most recently "
+            f"{uneins[-1]['datum']}. The same query counted differently when "
+            f"stated explicitly, which means the default may have changed "
+            f"meaning. Treat any step in the curve around that date as a "
+            f"measurement artefact until it is explained.\n\n")
+    if schief:
+        p_ = schief[-1]
+        warnung += (
+            f"> ⚠️ **The per-notified-body sum no longer matches the total** "
+            f"({p_['nb_summe']:,} vs {p_['zertifikate']:,} on {p_['datum']}). "
+            f"The partition was exact when first measured, so a difference is "
+            f"itself a finding — a certificate without a notified body, a "
+            f"body missing from the list, or double counting.\n\n")
+    if warnung:
+        return warnung
     alter = (heute - date.fromisoformat(taeglich[-1]["datum"])).days
     if alter > VERALTET_TAGE:
         return (f"> ⚠️ **This series is stale.** The newest measurement is "
@@ -308,8 +338,11 @@ python scripts/zaehlstand.py
 python scripts/fill_level.py
 ```
 
-Raw series: [`data/census/`](../data/census/) — seed anchors with their
-provenance, the daily JSONL, and dated dumps of the certificate table.
+Raw series:
+[`data/census/`](https://github.com/AG-Kollotzek/eudamed-api-field-guide/tree/main/data/census)
+— seed anchors with their provenance, the daily JSONL, and dated dumps of the
+certificate table. (Full URL on purpose: only `docs/` is published as a
+website, so a relative link out of it would not resolve.)
 
 ## Source and licence of the underlying data
 

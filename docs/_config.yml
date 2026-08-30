@@ -1,0 +1,13 @@
+# GitHub Pages serves this directory as a website.
+#
+# `jekyll-relative-links` is enabled by default on GitHub Pages and rewrites
+# links like `gotchas.md` to their rendered counterpart — the same links keep
+# working when the files are browsed in the repository. Anything OUTSIDE this
+# directory (data/, scripts/) is not published here and must be linked with a
+# full github.com URL instead.
+title: EUDAMED API Field Guide
+description: >-
+  Measured documentation of the two public EUDAMED APIs, with the probe
+  scripts to reproduce every finding. IGRT Lab, Medical University of
+  Innsbruck.
+theme: jekyll-theme-primer

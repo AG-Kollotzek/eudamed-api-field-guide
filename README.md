@@ -1,5 +1,8 @@
 # EUDAMED API Field Guide
 
+**📖 Rendered as a website:
+[ag-kollotzek.github.io/eudamed-api-field-guide](https://ag-kollotzek.github.io/eudamed-api-field-guide/)**
+
 Measured documentation of the two public APIs of
 [EUDAMED](https://ec.europa.eu/tools/eudamed/eudamed), the European database
 on medical devices — with the probe scripts to reproduce every finding.
