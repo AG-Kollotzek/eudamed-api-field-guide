@@ -154,8 +154,13 @@ def svg(punkte: list[dict]) -> str:
                       (NACHTRAG_ENDE, "NB backfill deadline 2027-05-28")):
         teile.append(f'<line x1="{x(tag):.1f}" y1="{rand}" x2="{x(tag):.1f}" '
                      f'y2="{hoehe - rand}" stroke="#b91c1c" stroke-dasharray="4 3"/>')
-        teile.append(f'<text x="{x(tag) + 4:.1f}" y="{rand + 12}" '
-                     f'fill="#b91c1c">{name}</text>')
+        # Labels sit inside the plot: the right-hand deadline is close to the
+        # edge, and a left-anchored label there runs out of the viewBox.
+        rechts = x(tag) > breite / 2
+        teile.append(
+            f'<text x="{x(tag) + (-4 if rechts else 4):.1f}" y="{rand + 12}" '
+            f'text-anchor="{"end" if rechts else "start"}" '
+            f'fill="#b91c1c">{name}</text>')
     # axes
     teile.append(f'<line x1="{rand}" y1="{hoehe - rand}" x2="{breite - rand}" '
                  f'y2="{hoehe - rand}" stroke="#333"/>')
