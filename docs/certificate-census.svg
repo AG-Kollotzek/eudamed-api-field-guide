@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" font-family="system-ui, sans-serif" font-size="12">
+<rect width="900" height="380" fill="white"/>
+<line x1="87.8" y1="60" x2="87.8" y2="320" stroke="#b91c1c" stroke-dasharray="4 3"/>
+<text x="91.8" y="72" fill="#b91c1c">mandatory since 2026-05-28</text>
+<line x1="812.2" y1="60" x2="812.2" y2="320" stroke="#b91c1c" stroke-dasharray="4 3"/>
+<text x="816.2" y="72" fill="#b91c1c">NB backfill deadline 2027-05-28</text>
+<line x1="60" y1="320" x2="840" y2="320" stroke="#333"/>
+<line x1="60" y1="60" x2="60" y2="320" stroke="#333"/>
+<text x="52" y="324.0" text-anchor="end" fill="#555">0</text>
+<line x1="60" y1="320.0" x2="840" y2="320.0" stroke="#eee"/>
+<text x="52" y="281.0" text-anchor="end" fill="#555">1,000</text>
+<line x1="60" y1="277.0" x2="840" y2="277.0" stroke="#eee"/>
+<text x="52" y="238.1" text-anchor="end" fill="#555">2,000</text>
+<line x1="60" y1="234.1" x2="840" y2="234.1" stroke="#eee"/>
+<text x="52" y="195.1" text-anchor="end" fill="#555">3,000</text>
+<line x1="60" y1="191.1" x2="840" y2="191.1" stroke="#eee"/>
+<text x="52" y="152.1" text-anchor="end" fill="#555">4,000</text>
+<line x1="60" y1="148.1" x2="840" y2="148.1" stroke="#eee"/>
+<text x="52" y="109.1" text-anchor="end" fill="#555">5,000</text>
+<line x1="60" y1="105.1" x2="840" y2="105.1" stroke="#eee"/>
+<text x="52" y="66.2" text-anchor="end" fill="#555">6,000</text>
+<line x1="60" y1="62.2" x2="840" y2="62.2" stroke="#eee"/>
+<text x="95.7" y="338" text-anchor="middle" fill="#555">Jun 26</text>
+<text x="155.3" y="338" text-anchor="middle" fill="#555">Jul 26</text>
+<text x="216.8" y="338" text-anchor="middle" fill="#555">Aug 26</text>
+<text x="278.3" y="338" text-anchor="middle" fill="#555">Sep 26</text>
+<text x="337.9" y="338" text-anchor="middle" fill="#555">Oct 26</text>
+<text x="399.4" y="338" text-anchor="middle" fill="#555">Nov 26</text>
+<text x="458.9" y="338" text-anchor="middle" fill="#555">Dec 26</text>
+<text x="520.5" y="338" text-anchor="middle" fill="#555">Jan 27</text>
+<text x="582.0" y="338" text-anchor="middle" fill="#555">Feb 27</text>
+<text x="637.6" y="338" text-anchor="middle" fill="#555">Mar 27</text>
+<text x="699.1" y="338" text-anchor="middle" fill="#555">Apr 27</text>
+<text x="758.6" y="338" text-anchor="middle" fill="#555">May 27</text>
+<text x="820.2" y="338" text-anchor="middle" fill="#555">Jun 27</text>
+<polyline points="212.8,146.0 224.7,145.7 252.5,127.8 274.4,120.0" fill="none" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="212.8" cy="146.0" r="4" fill="white" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="224.7" cy="145.7" r="4" fill="white" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="252.5" cy="127.8" r="4" fill="white" stroke="#1d4ed8" stroke-width="2"/>
+<circle cx="274.4" cy="120.0" r="4" fill="#1d4ed8"/>
+<text x="60" y="30" font-size="16" fill="#111">EUDAMED certificate-search module: total records</text>
+<text x="60" y="48" fill="#555">open circles = documented anchors · filled = daily census</text>
+</svg>

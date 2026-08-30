@@ -34,6 +34,7 @@ what differs is filter semantics and field scope.
 | [docs/filter-matrix.md](docs/filter-matrix.md) | Which query parameters of the UI device search actually work, and which are silently discarded |
 | [docs/module-matrix.md](docs/module-matrix.md) | All nine public UI screens and their endpoints, incl. the certificate search |
 | [docs/gotchas.md](docs/gotchas.md) | The traps, collected — start here |
+| [docs/certificate-census.md](docs/certificate-census.md) | How fast the certificate module fills during the mandatory phase — one measurement per day |
 | [docs/changelog.md](docs/changelog.md) | What has changed since, as recorded by the watch |
 | [PROBE_RESULTS.md](PROBE_RESULTS.md) | Raw output of the probe runs |
 

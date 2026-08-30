@@ -43,6 +43,11 @@ every 14 days:
 
 Limits:
 
+Since format 5 there is one exception to "counts are secondary":
+`bestaende` records the total certificate count and the "Braun" name-search
+count as a time series — not as an alarm. The numbers were always in the
+responses; only their totalElements were discarded.
+
 * Meaning changes behind plausible numbers stay invisible. If
   `riskClassCode` came to mean "at least this class", the counts would
   still differ and nothing would be reported.
@@ -98,7 +103,10 @@ VERZOEGERUNG_S = 15.0
 #: 2 (2026-08-14)  plus wishlist, control probe, prefix search, page numbering
 #: 3 (2026-08-16)  plus the feature switches of the public site
 #: 4 (2026-08-17)  plus the official API
-FORMAT = 4
+#: 5 (2026-08-30)  plus `bestaende`: total certificate count and the "Braun"
+#:                 name-search count. The responses always carried them; only
+#:                 their totalElements were discarded — 0 extra requests.
+FORMAT = 5
 
 #: Reference group for all measurements: large enough for meaningful numbers,
 #: small enough for a fast count query. Same group as probes/probe_05_filters.py,
@@ -618,6 +626,7 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
     try:
         antwort = client.search_certificates(page_size=1)
         aufnahme["felder"]["zertifikate"] = _felder((antwort.content or [None])[0])
+        aufnahme.setdefault("bestaende", {})["zertifikate"] = antwort.total_elements
     except Exception as exc:  # noqa: BLE001
         aufnahme["fehler"].append(f"Zertifikatssuche: {_kurz(exc)}")
     pause()
@@ -626,6 +635,10 @@ def erhebe(client: Any, pause_s: float = PAUSE_S,
     try:
         antwort = client.search_actors(name="Braun", page_size=1)
         aufnahme["felder"]["hersteller"] = _felder((antwort.content or [None])[0])
+        # Ehrlich benannt: die Trefferzahl der NAMENSSUCHE "Braun", kein
+        # Gesamtbestand. Als Zeitreihe trotzdem brauchbar — sie bewegt sich
+        # nur, wenn Akteure dazukommen oder die Suchsemantik kippt.
+        aufnahme.setdefault("bestaende", {})["hersteller_braun"] = antwort.total_elements
     except Exception as exc:  # noqa: BLE001
         aufnahme["fehler"].append(f"Herstellersuche: {_kurz(exc)}")
     pause()
